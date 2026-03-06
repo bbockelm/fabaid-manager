@@ -41,21 +41,156 @@ function StatusBadge({ status }: { status: string }) {
   );
 }
 
+/** Modal overlay to display a key with copy button */
+function KeyModal({ title, keyHex, onClose }: { title: string; keyHex: string; onClose: () => void }) {
+  const [copied, setCopied] = useState(false);
+  const handleCopy = async () => {
+    await navigator.clipboard.writeText(keyHex);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={onClose}>
+      <div className="bg-white rounded-lg shadow-xl max-w-lg w-full mx-4 p-6" onClick={e => e.stopPropagation()}>
+        <h3 className="text-lg font-semibold text-gray-900 mb-2">{title}</h3>
+        <p className="text-xs text-gray-500 mb-3">
+          This key can be shared to allow decryption. Keep it safe.
+        </p>
+        <div className="bg-gray-50 border rounded-md p-3 font-mono text-sm break-all select-all text-gray-700">
+          {keyHex}
+        </div>
+        <div className="flex justify-end gap-2 mt-4">
+          <button
+            onClick={handleCopy}
+            className="px-4 py-2 text-sm bg-nsf-light text-white rounded-md hover:bg-nsf-blue transition-colors"
+          >
+            {copied ? '✓ Copied!' : '📋 Copy to Clipboard'}
+          </button>
+          <button
+            onClick={onClose}
+            className="px-4 py-2 text-sm border border-gray-300 rounded-md hover:bg-gray-50 transition-colors"
+          >
+            Close
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** Upload & Restore modal with optional decryption key input */
+function UploadRestoreModal({ onClose }: { onClose: () => void }) {
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [file, setFile] = useState<File | null>(null);
+  const [decryptKey, setDecryptKey] = useState('');
+  const [encrypted, setEncrypted] = useState(true);
+  const [status, setStatus] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const handleSubmit = async () => {
+    if (!file) return;
+    if (!confirm(`Restore from "${file.name}"?\n\nThis will overwrite the current database and documents.`)) return;
+    setStatus('Uploading and restoring...');
+    setError(null);
+    try {
+      await api.backup.uploadRestore(file, encrypted, decryptKey || undefined);
+      setStatus('Restore completed! Reloading...');
+      setTimeout(() => window.location.reload(), 1500);
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Unknown error');
+      setStatus(null);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={onClose}>
+      <div className="bg-white rounded-lg shadow-xl max-w-lg w-full mx-4 p-6" onClick={e => e.stopPropagation()}>
+        <h3 className="text-lg font-semibold text-gray-900 mb-4">Upload &amp; Restore Backup</h3>
+
+        <div className="space-y-4">
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Backup File</label>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".tar.gz,.tar.gz.enc,.enc"
+              onChange={e => setFile(e.target.files?.[0] || null)}
+              className="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-md file:border-0 file:text-sm file:font-medium file:bg-nsf-light file:text-white hover:file:bg-nsf-blue"
+            />
+          </div>
+
+          <div className="flex items-center gap-2">
+            <input
+              type="checkbox"
+              id="encrypted-cb"
+              checked={encrypted}
+              onChange={e => setEncrypted(e.target.checked)}
+              className="rounded border-gray-300"
+            />
+            <label htmlFor="encrypted-cb" className="text-sm text-gray-700">File is encrypted</label>
+          </div>
+
+          {encrypted && (
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                Decryption Key <span className="text-gray-400 font-normal">(per-backup or general backup key, hex)</span>
+              </label>
+              <input
+                type="text"
+                value={decryptKey}
+                onChange={e => setDecryptKey(e.target.value.trim())}
+                placeholder="Leave empty if this server has the master key"
+                className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm font-mono placeholder:font-sans focus:outline-none focus:ring-2 focus:ring-nsf-light"
+              />
+              <p className="text-xs text-gray-400 mt-1">
+                If restoring on the same server that created the backup, you can leave this empty.
+                If restoring on a different server, provide the per-backup key or general backup key.
+              </p>
+            </div>
+          )}
+
+          {error && (
+            <div className="bg-red-50 border border-red-200 text-red-700 p-3 rounded-md text-sm">{error}</div>
+          )}
+          {status && (
+            <div className="bg-blue-50 border border-blue-200 text-blue-700 p-3 rounded-md text-sm">{status}</div>
+          )}
+        </div>
+
+        <div className="flex justify-end gap-2 mt-6">
+          <button
+            onClick={handleSubmit}
+            disabled={!file || !!status}
+            className="px-4 py-2 text-sm bg-nsf-light text-white rounded-md hover:bg-nsf-blue transition-colors disabled:opacity-50"
+          >
+            🔄 Restore
+          </button>
+          <button
+            onClick={onClose}
+            className="px-4 py-2 text-sm border border-gray-300 rounded-md hover:bg-gray-50 transition-colors"
+          >
+            Cancel
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function BackupPage() {
   const { isAdmin } = useAuth();
   const queryClient = useQueryClient();
-  const fileInputRef = useRef<HTMLInputElement>(null);
   const [restoring, setRestoring] = useState<string | null>(null);
-  const [uploadMsg, setUploadMsg] = useState<string | null>(null);
   const [justTriggered, setJustTriggered] = useState(false);
+  const [keyModal, setKeyModal] = useState<{ title: string; keyHex: string } | null>(null);
+  const [showUploadModal, setShowUploadModal] = useState(false);
 
   const { data: backups, isLoading, error } = useQuery({
     queryKey: ['backups'],
     queryFn: api.backup.list,
     retry: false,
-    // Poll every 2s when a backup is running or was just triggered; 10s otherwise.
     refetchInterval: (query) => {
-      if (query.state.error) return false; // stop polling on error
+      if (query.state.error) return false;
       const data = query.state.data as BackupRecord[] | undefined;
       const hasRunning = data?.some(b => b.status === 'running');
       return (hasRunning || justTriggered) ? 2000 : 10000;
@@ -67,15 +202,12 @@ export default function BackupPage() {
     onSuccess: () => {
       setJustTriggered(true);
       queryClient.invalidateQueries({ queryKey: ['backups'] });
-      // Stop fast-polling after 60s even if something is stuck.
       setTimeout(() => setJustTriggered(false), 60000);
     },
   });
 
-  // Clear justTriggered once the running backup finishes.
   const hasRunning = backups?.some(b => b.status === 'running');
   if (justTriggered && backups && !hasRunning) {
-    // The backup finished (or failed) — stop fast-polling on next render.
     setTimeout(() => setJustTriggered(false), 0);
   }
 
@@ -105,22 +237,22 @@ export default function BackupPage() {
     restoreMutation.mutate(backup.id);
   };
 
-  const handleUploadRestore = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    if (!confirm(`Restore from uploaded file "${file.name}"?\n\nThis will overwrite the current database and documents.`)) {
-      e.target.value = '';
-      return;
-    }
-    setUploadMsg('Uploading and restoring...');
+  const handleShowPerBackupKey = async (backup: BackupRecord) => {
     try {
-      await api.backup.uploadRestore(file);
-      setUploadMsg('Restore completed! Reloading...');
-      setTimeout(() => window.location.reload(), 1500);
+      const resp = await api.backup.getPerBackupKey(backup.id);
+      setKeyModal({ title: `Decryption Key — ${backup.filename}`, keyHex: resp.key });
     } catch (err: unknown) {
-      setUploadMsg(`Restore failed: ${err instanceof Error ? err.message : 'Unknown error'}`);
+      alert(`Failed to get key: ${err instanceof Error ? err.message : 'Unknown error'}`);
     }
-    e.target.value = '';
+  };
+
+  const handleShowGeneralKey = async () => {
+    try {
+      const resp = await api.backup.getGeneralBackupKey();
+      setKeyModal({ title: 'General Backup Decryption Key', keyHex: resp.key });
+    } catch (err: unknown) {
+      alert(`Failed to get key: ${err instanceof Error ? err.message : 'Unknown error'}`);
+    }
   };
 
   const lastCompleted = backups?.find(b => b.status === 'completed');
@@ -137,6 +269,9 @@ export default function BackupPage() {
 
   return (
     <div className="max-w-5xl space-y-6">
+      {keyModal && <KeyModal title={keyModal.title} keyHex={keyModal.keyHex} onClose={() => setKeyModal(null)} />}
+      {showUploadModal && <UploadRestoreModal onClose={() => setShowUploadModal(false)} />}
+
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold text-nsf-blue">System Backups</h1>
@@ -154,27 +289,21 @@ export default function BackupPage() {
               {triggerMutation.isPending ? 'Starting...' : hasRunning ? 'Backup Running...' : '📦 Create Backup'}
             </button>
             <button
-              onClick={() => fileInputRef.current?.click()}
+              onClick={() => setShowUploadModal(true)}
               className="px-4 py-2 border border-gray-300 rounded-md hover:bg-gray-50 transition-colors text-sm font-medium"
             >
               📤 Upload &amp; Restore
             </button>
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept=".tar.gz,.tar.gz.enc,.enc"
-              className="hidden"
-              onChange={handleUploadRestore}
-            />
+            <button
+              onClick={handleShowGeneralKey}
+              className="px-4 py-2 border border-amber-300 bg-amber-50 rounded-md hover:bg-amber-100 transition-colors text-sm font-medium text-amber-800"
+              title="Show the general backup decryption key (can decrypt any backup)"
+            >
+              🔑 General Key
+            </button>
           </div>
         )}
       </div>
-
-      {uploadMsg && (
-        <div className={`p-3 rounded-md text-sm ${uploadMsg.includes('failed') ? 'bg-red-50 text-red-700' : 'bg-blue-50 text-blue-700'}`}>
-          {uploadMsg}
-        </div>
-      )}
 
       {/* Time since last backup */}
       <div className="bg-white p-4 rounded-lg border border-gray-200">
@@ -266,8 +395,17 @@ export default function BackupPage() {
                   </td>
                   <td className="px-4 py-3 text-sm text-gray-600">{duration}</td>
                   <td className="px-4 py-3 text-right">
-                    {b.status === 'completed' && (
-                      <div className="flex items-center justify-end gap-1">
+                    <div className="flex items-center justify-end gap-1">
+                      {b.status === 'completed' && b.encrypted && isAdmin && (
+                        <button
+                          onClick={() => handleShowPerBackupKey(b)}
+                          className="px-2 py-1 text-xs bg-amber-50 hover:bg-amber-100 border border-amber-200 rounded transition-colors"
+                          title="Show per-backup decryption key"
+                        >
+                          🔑
+                        </button>
+                      )}
+                      {b.status === 'completed' && (
                         <a
                           href={api.backup.downloadUrl(b.id)}
                           className="px-2 py-1 text-xs bg-gray-100 hover:bg-gray-200 rounded transition-colors"
@@ -275,29 +413,29 @@ export default function BackupPage() {
                         >
                           ⬇️
                         </a>
-                        {isAdmin && (
-                          <>
-                            <button
-                              onClick={() => handleRestore(b)}
-                              disabled={restoring === b.id}
-                              className="px-2 py-1 text-xs bg-amber-100 hover:bg-amber-200 rounded transition-colors disabled:opacity-50"
-                              title="Restore from this backup"
-                            >
-                              {restoring === b.id ? '...' : '🔄'}
-                            </button>
-                            <button
-                              onClick={() => {
-                                if (confirm('Delete this backup?')) deleteMutation.mutate(b.id);
-                              }}
-                              className="px-2 py-1 text-xs bg-red-100 hover:bg-red-200 rounded transition-colors"
-                              title="Delete backup"
-                            >
-                              🗑️
-                            </button>
-                          </>
-                        )}
-                      </div>
-                    )}
+                      )}
+                      {b.status === 'completed' && isAdmin && (
+                        <>
+                          <button
+                            onClick={() => handleRestore(b)}
+                            disabled={restoring === b.id}
+                            className="px-2 py-1 text-xs bg-amber-100 hover:bg-amber-200 rounded transition-colors disabled:opacity-50"
+                            title="Restore from this backup"
+                          >
+                            {restoring === b.id ? '...' : '🔄'}
+                          </button>
+                          <button
+                            onClick={() => {
+                              if (confirm('Delete this backup?')) deleteMutation.mutate(b.id);
+                            }}
+                            className="px-2 py-1 text-xs bg-red-100 hover:bg-red-200 rounded transition-colors"
+                            title="Delete backup"
+                          >
+                            🗑️
+                          </button>
+                        </>
+                      )}
+                    </div>
                   </td>
                 </tr>
               );

@@ -28,15 +28,45 @@ import (
 
 // Service manages backup creation, encryption, and storage.
 type Service struct {
-	cfg     *config.Config
-	queries *db.Queries
-	store   *storage.Store
-	enc     *crypto.Encryptor
+	cfg            *config.Config
+	queries        *db.Queries
+	store          *storage.Store
+	enc            *crypto.Encryptor
+	masterKeyHex   string   // needed for backup key derivation
+	generalBackupKey []byte // cached general backup key
 }
 
 // NewService creates a backup service.
 func NewService(cfg *config.Config, queries *db.Queries, store *storage.Store, enc *crypto.Encryptor) *Service {
-	return &Service{cfg: cfg, queries: queries, store: store, enc: enc}
+	s := &Service{cfg: cfg, queries: queries, store: store, enc: enc}
+	if cfg.DocumentMasterKey != "" {
+		s.masterKeyHex = cfg.DocumentMasterKey
+		if gbk, err := crypto.DeriveBackupKey(cfg.DocumentMasterKey); err == nil {
+			s.generalBackupKey = gbk
+		}
+	}
+	return s
+}
+
+// GeneralBackupKeyHex returns the hex-encoded general backup key.
+// This key can decrypt any backup. Never expose the master key.
+func (s *Service) GeneralBackupKeyHex() (string, error) {
+	if len(s.generalBackupKey) == 0 {
+		return "", fmt.Errorf("encryption not configured")
+	}
+	return hex.EncodeToString(s.generalBackupKey), nil
+}
+
+// PerBackupKeyHex returns the hex-encoded per-backup decryption key for a specific backup filename.
+func (s *Service) PerBackupKeyHex(backupFilename string) (string, error) {
+	if len(s.generalBackupKey) == 0 {
+		return "", fmt.Errorf("encryption not configured")
+	}
+	pbk, err := crypto.DerivePerBackupKey(s.generalBackupKey, backupFilename)
+	if err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(pbk), nil
 }
 
 // backupS3Prefix is the key prefix for backup objects.
@@ -192,11 +222,18 @@ func (s *Service) RunBackup(ctx context.Context, backup *models.Backup) error {
 	tw.Close()
 	gzw.Close()
 
-	// 3. Encrypt the tarball
+	// 3. Encrypt the tarball using per-backup key
 	s.queries.UpdateBackupProgress(ctx, backup.ID, "Encrypting archive")
 	archive := tarBuf.Bytes()
 	var finalData []byte
-	if s.enc != nil {
+	if s.enc != nil && len(s.generalBackupKey) > 0 {
+		// Derive per-backup key from general backup key + filename
+		perBackupKey, err := crypto.DerivePerBackupKey(s.generalBackupKey, backup.Filename)
+		if err != nil {
+			s.queries.FailBackup(ctx, backup.ID, err.Error())
+			return fmt.Errorf("deriving per-backup key: %w", err)
+		}
+
 		dek, err := crypto.GenerateDEK()
 		if err != nil {
 			s.queries.FailBackup(ctx, backup.ID, err.Error())
@@ -207,7 +244,7 @@ func (s *Service) RunBackup(ctx context.Context, backup *models.Backup) error {
 			s.queries.FailBackup(ctx, backup.ID, err.Error())
 			return fmt.Errorf("encrypting backup: %w", err)
 		}
-		wrappedDEK, nonce, err := s.enc.WrapDEK(dek)
+		wrappedDEK, nonce, err := crypto.WrapDEKWithKey(perBackupKey, dek)
 		if err != nil {
 			s.queries.FailBackup(ctx, backup.ID, err.Error())
 			return fmt.Errorf("wrapping DEK: %w", err)
@@ -361,9 +398,32 @@ func (s *Service) DownloadBackup(ctx context.Context, backupID string) (io.ReadC
 }
 
 // DecryptBackup decrypts an encrypted backup archive, returning the raw tar.gz data.
-func (s *Service) DecryptBackup(encryptedData []byte) ([]byte, error) {
-	if s.enc == nil {
-		// Not encrypted; return as-is
+// If decryptKeyHex is provided, it is used as the per-backup decryption key.
+// Otherwise, the server derives the key from its master key.
+func (s *Service) DecryptBackup(encryptedData []byte, backupFilename string, decryptKeyHex string) ([]byte, error) {
+	// Determine the per-backup key to use for unwrapping
+	var perBackupKey []byte
+
+	if decryptKeyHex != "" {
+		// Caller provided a key — could be per-backup key (32 bytes) or general backup key (32 bytes).
+		providedKey, err := hex.DecodeString(decryptKeyHex)
+		if err != nil {
+			return nil, fmt.Errorf("invalid decryption key hex: %w", err)
+		}
+		if len(providedKey) != 32 {
+			return nil, fmt.Errorf("decryption key must be 32 bytes (64 hex chars), got %d", len(providedKey))
+		}
+		// Try as per-backup key first; if that fails, try as general backup key
+		perBackupKey = providedKey
+	} else if len(s.generalBackupKey) > 0 {
+		// Derive from server's own general backup key
+		key, err := crypto.DerivePerBackupKey(s.generalBackupKey, backupFilename)
+		if err != nil {
+			return nil, fmt.Errorf("deriving per-backup key: %w", err)
+		}
+		perBackupKey = key
+	} else {
+		// Not encrypted or no key available; return as-is
 		return encryptedData, nil
 	}
 
@@ -392,7 +452,15 @@ func (s *Service) DecryptBackup(encryptedData []byte) ([]byte, error) {
 	wrappedDEK := encryptedData[offset : offset+dekLen]
 	offset += dekLen
 
-	dek, err := s.enc.UnwrapDEK(wrappedDEK, nonce)
+	// Try unwrapping with the per-backup key
+	dek, err := crypto.UnwrapDEKWithKey(perBackupKey, wrappedDEK, nonce)
+	if err != nil && decryptKeyHex != "" {
+		// If the provided key didn't work as a per-backup key, try it as a general backup key
+		derivedKey, deriveErr := crypto.DerivePerBackupKey(perBackupKey, backupFilename)
+		if deriveErr == nil {
+			dek, err = crypto.UnwrapDEKWithKey(derivedKey, wrappedDEK, nonce)
+		}
+	}
 	if err != nil {
 		return nil, fmt.Errorf("unwrapping DEK: %w", err)
 	}
@@ -424,19 +492,20 @@ func (s *Service) RestoreFromBackup(ctx context.Context, backupID string) error 
 		return fmt.Errorf("checksum mismatch: backup may be corrupted")
 	}
 
-	return s.restoreFromData(ctx, data, b.Encrypted)
+	return s.restoreFromData(ctx, data, b.Encrypted, b.Filename, "")
 }
 
 // RestoreFromUpload restores from uploaded backup data.
-func (s *Service) RestoreFromUpload(ctx context.Context, data []byte, encrypted bool) error {
-	return s.restoreFromData(ctx, data, encrypted)
+// decryptKeyHex is the per-backup key or general backup key provided by the user.
+func (s *Service) RestoreFromUpload(ctx context.Context, data []byte, encrypted bool, filename string, decryptKeyHex string) error {
+	return s.restoreFromData(ctx, data, encrypted, filename, decryptKeyHex)
 }
 
-func (s *Service) restoreFromData(ctx context.Context, data []byte, encrypted bool) error {
+func (s *Service) restoreFromData(ctx context.Context, data []byte, encrypted bool, filename string, decryptKeyHex string) error {
 	archiveData := data
-	if encrypted && s.enc != nil {
+	if encrypted {
 		var err error
-		archiveData, err = s.DecryptBackup(data)
+		archiveData, err = s.DecryptBackup(data, filename, decryptKeyHex)
 		if err != nil {
 			return fmt.Errorf("decrypting: %w", err)
 		}

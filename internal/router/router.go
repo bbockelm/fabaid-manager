@@ -204,8 +204,11 @@ func New(cfg *config.Config, pool *pgxpool.Pool, store *storage.Store) (*chi.Mux
 					r.Post("/upload-restore", h.UploadRestore)
 					r.Get("/settings", h.GetBackupSettings)
 					r.Put("/settings", h.UpdateBackupSettings)
+					r.Get("/general-key", h.GetGeneralBackupKey)
+					r.Post("/derive-key", h.DeriveKeyFromInput)
 					r.Route("/{backupID}", func(r chi.Router) {
 						r.Get("/download", h.DownloadBackup)
+						r.Get("/key", h.GetPerBackupKey)
 						r.Post("/restore", h.RestoreBackup)
 						r.Delete("/", h.DeleteBackup)
 					})

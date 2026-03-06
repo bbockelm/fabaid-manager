@@ -583,17 +583,22 @@ export const api = {
 
   backup: {
     list: () => fetchJSON<BackupRecord[]>('/backups'),
-    trigger: () => fetchJSON<{ status: string }>('/backups/trigger', { method: 'POST' }),
+    trigger: () => fetchJSON<{ status: string; id: string }>('/backups/trigger', { method: 'POST' }),
     downloadUrl: (backupId?: string) =>
       backupId ? `${API_BASE}/backups/${backupId}/download` : `${API_BASE}/backup`,
     restore: (backupId: string) =>
       fetchJSON<{ status: string }>(`/backups/${backupId}/restore`, { method: 'POST' }),
     delete: (backupId: string) =>
       fetchJSON<void>(`/backups/${backupId}`, { method: 'DELETE' }),
-    uploadRestore: async (file: File, encrypted = true) => {
+    getPerBackupKey: (backupId: string) =>
+      fetchJSON<{ key: string; filename: string }>(`/backups/${backupId}/key`),
+    getGeneralBackupKey: () =>
+      fetchJSON<{ key: string }>('/backups/general-key'),
+    uploadRestore: async (file: File, encrypted = true, decryptKey?: string) => {
       const form = new FormData();
       form.append('file', file);
       form.append('encrypted', String(encrypted));
+      if (decryptKey) form.append('decrypt_key', decryptKey);
       const res = await fetch(`${API_BASE}/backups/upload-restore`, {
         method: 'POST',
         body: form,

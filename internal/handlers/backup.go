@@ -2,10 +2,13 @@ package handlers
 
 import (
 	"context"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 
+	"github.com/bbockelm/fabaid-manager/internal/crypto"
 	"github.com/bbockelm/fabaid-manager/internal/models"
 	"github.com/go-chi/chi/v5"
 	"github.com/rs/zerolog/log"
@@ -113,7 +116,7 @@ func (h *Handler) UploadRestore(w http.ResponseWriter, r *http.Request) {
 
 	r.Body = http.MaxBytesReader(w, r.Body, 2<<30) // 2GB limit
 
-	file, _, err := r.FormFile("file")
+	file, fileHeader, err := r.FormFile("file")
 	if err != nil {
 		respondError(w, http.StatusBadRequest, "missing file in upload")
 		return
@@ -127,8 +130,10 @@ func (h *Handler) UploadRestore(w http.ResponseWriter, r *http.Request) {
 	}
 
 	encrypted := r.FormValue("encrypted") != "false" // default true
+	decryptKey := r.FormValue("decrypt_key")          // optional: per-backup or general backup key hex
+	filename := fileHeader.Filename                     // use uploaded filename for key derivation
 
-	if err := h.backupSvc.RestoreFromUpload(r.Context(), data, encrypted); err != nil {
+	if err := h.backupSvc.RestoreFromUpload(r.Context(), data, encrypted, filename, decryptKey); err != nil {
 		respondError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -192,4 +197,63 @@ func (h *Handler) CreateBackupLegacy(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/octet-stream")
 	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, backup.Filename))
 	io.Copy(w, reader)
+}
+
+// GetGeneralBackupKey returns the hex-encoded general backup decryption key.
+func (h *Handler) GetGeneralBackupKey(w http.ResponseWriter, r *http.Request) {
+	if h.backupSvc == nil {
+		respondError(w, http.StatusServiceUnavailable, "backup service not configured")
+		return
+	}
+	keyHex, err := h.backupSvc.GeneralBackupKeyHex()
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	respondJSON(w, http.StatusOK, map[string]string{"key": keyHex})
+}
+
+// GetPerBackupKey returns the hex-encoded per-backup decryption key for a specific backup.
+func (h *Handler) GetPerBackupKey(w http.ResponseWriter, r *http.Request) {
+	if h.backupSvc == nil {
+		respondError(w, http.StatusServiceUnavailable, "backup service not configured")
+		return
+	}
+	backupID := chi.URLParam(r, "backupID")
+	backup, err := h.queries.GetBackup(r.Context(), backupID)
+	if err != nil {
+		respondError(w, http.StatusNotFound, "backup not found")
+		return
+	}
+	keyHex, err := h.backupSvc.PerBackupKeyHex(backup.Filename)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	respondJSON(w, http.StatusOK, map[string]string{"key": keyHex, "filename": backup.Filename})
+}
+
+// DeriveKeyFromInput derives a per-backup key from a user-provided general backup key and filename.
+// This allows decryption without the server's master key.
+func (h *Handler) DeriveKeyFromInput(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		GeneralKey string `json:"general_key"`
+		Filename   string `json:"filename"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		respondError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if req.GeneralKey == "" || req.Filename == "" {
+		respondError(w, http.StatusBadRequest, "general_key and filename are required")
+		return
+	}
+
+	// This is a pure derivation — no master key needed
+	key, err := crypto.DerivePerBackupKeyFromHex(req.GeneralKey, req.Filename)
+	if err != nil {
+		respondError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	respondJSON(w, http.StatusOK, map[string]string{"key": hex.EncodeToString(key)})
 }

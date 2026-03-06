@@ -1,4 +1,4 @@
-// Package crypto provides envelope encryption for documents.
+// Package crypto provides envelope encryption for documents and backups.
 //
 // Architecture:
 //   - A project master key (32 bytes, hex-encoded) is provided at startup via config.
@@ -8,6 +8,13 @@
 //   - The DEK itself is encrypted (wrapped) with AES-256-GCM using the KEK and
 //     stored in the database alongside its nonce.
 //   - Even if the database AND S3 are both compromised, the master key is needed.
+//
+// Backup key hierarchy:
+//   - Master key → HKDF("fabaid-backup-key") → General Backup Key (shareable)
+//   - General Backup Key + filename → HKDF(filename as salt) → Per-Backup Key
+//   - Per-Backup Key wraps the random DEK for that backup's archive.
+//   - Sharing a per-backup key only lets the recipient decrypt that one backup.
+//   - Sharing the general backup key lets them decrypt any backup.
 package crypto
 
 import (
@@ -147,4 +154,83 @@ func Decrypt(dek, ciphertext []byte) ([]byte, error) {
 		return nil, fmt.Errorf("decrypting data: %w", err)
 	}
 	return plaintext, nil
+}
+
+// --- Backup key hierarchy ---
+
+// DeriveBackupKey derives the general backup key from a master key hex string.
+// This key can derive any per-backup key, so it should be shared carefully.
+func DeriveBackupKey(masterKeyHex string) ([]byte, error) {
+	masterKey, err := hex.DecodeString(masterKeyHex)
+	if err != nil {
+		return nil, fmt.Errorf("decoding master key hex: %w", err)
+	}
+	if len(masterKey) != 32 {
+		return nil, fmt.Errorf("master key must be 32 bytes, got %d", len(masterKey))
+	}
+	r := hkdf.New(sha256.New, masterKey, nil, []byte("fabaid-backup-key"))
+	key := make([]byte, 32)
+	if _, err := io.ReadFull(r, key); err != nil {
+		return nil, fmt.Errorf("deriving backup key: %w", err)
+	}
+	return key, nil
+}
+
+// DerivePerBackupKey derives a per-backup key from the general backup key
+// and a backup filename. Only this key is needed to decrypt that specific backup.
+func DerivePerBackupKey(generalBackupKey []byte, backupFilename string) ([]byte, error) {
+	if len(generalBackupKey) != 32 {
+		return nil, fmt.Errorf("general backup key must be 32 bytes, got %d", len(generalBackupKey))
+	}
+	// Use the filename as salt so each backup gets a unique key
+	r := hkdf.New(sha256.New, generalBackupKey, []byte(backupFilename), []byte("fabaid-per-backup-key"))
+	key := make([]byte, 32)
+	if _, err := io.ReadFull(r, key); err != nil {
+		return nil, fmt.Errorf("deriving per-backup key: %w", err)
+	}
+	return key, nil
+}
+
+// DerivePerBackupKeyFromHex is a convenience that takes the general backup key as hex.
+func DerivePerBackupKeyFromHex(generalBackupKeyHex string, backupFilename string) ([]byte, error) {
+	generalKey, err := hex.DecodeString(generalBackupKeyHex)
+	if err != nil {
+		return nil, fmt.Errorf("decoding general backup key: %w", err)
+	}
+	return DerivePerBackupKey(generalKey, backupFilename)
+}
+
+// WrapDEKWithKey wraps a DEK using an arbitrary 32-byte key (e.g. a per-backup key).
+func WrapDEKWithKey(key, dek []byte) (encryptedDEK, nonce []byte, err error) {
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return nil, nil, fmt.Errorf("creating cipher: %w", err)
+	}
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return nil, nil, fmt.Errorf("creating GCM: %w", err)
+	}
+	nonce = make([]byte, gcm.NonceSize())
+	if _, err := rand.Read(nonce); err != nil {
+		return nil, nil, fmt.Errorf("generating nonce: %w", err)
+	}
+	encryptedDEK = gcm.Seal(nil, nonce, dek, nil)
+	return encryptedDEK, nonce, nil
+}
+
+// UnwrapDEKWithKey unwraps a DEK using an arbitrary 32-byte key.
+func UnwrapDEKWithKey(key, encryptedDEK, nonce []byte) ([]byte, error) {
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return nil, fmt.Errorf("creating cipher: %w", err)
+	}
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return nil, fmt.Errorf("creating GCM: %w", err)
+	}
+	dek, err := gcm.Open(nil, nonce, encryptedDEK, nil)
+	if err != nil {
+		return nil, fmt.Errorf("unwrapping DEK (wrong key?): %w", err)
+	}
+	return dek, nil
 }
