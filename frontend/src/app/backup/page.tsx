@@ -49,11 +49,13 @@ export default function BackupPage() {
   const [uploadMsg, setUploadMsg] = useState<string | null>(null);
   const [justTriggered, setJustTriggered] = useState(false);
 
-  const { data: backups, isLoading } = useQuery({
+  const { data: backups, isLoading, error } = useQuery({
     queryKey: ['backups'],
     queryFn: api.backup.list,
+    retry: false,
     // Poll every 2s when a backup is running or was just triggered; 10s otherwise.
     refetchInterval: (query) => {
+      if (query.state.error) return false; // stop polling on error
       const data = query.state.data as BackupRecord[] | undefined;
       const hasRunning = data?.some(b => b.status === 'running');
       return (hasRunning || justTriggered) ? 2000 : 10000;
@@ -124,6 +126,14 @@ export default function BackupPage() {
   const lastCompleted = backups?.find(b => b.status === 'completed');
 
   if (isLoading) return <div className="p-4">Loading backups...</div>;
+  if (error) return (
+    <div className="p-4">
+      <h1 className="text-2xl font-bold text-nsf-blue mb-4">System Backups</h1>
+      <div className="bg-red-50 border border-red-200 text-red-700 p-4 rounded-md text-sm">
+        Failed to load backups: {error instanceof Error ? error.message : 'Unknown error'}
+      </div>
+    </div>
+  );
 
   return (
     <div className="max-w-5xl space-y-6">
