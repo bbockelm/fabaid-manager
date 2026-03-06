@@ -1,0 +1,45 @@
+# All-in-one development image that includes Postgres, MinIO, and the app.
+# Used for local dev from a backup or fresh start.
+FROM ubuntu:22.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Install deps
+RUN apt-get update && apt-get install -y \
+    postgresql postgresql-client \
+    curl wget ca-certificates \
+    supervisor \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install MinIO
+RUN curl -fsSL https://dl.min.io/server/minio/release/linux-amd64/minio -o /usr/local/bin/minio \
+    && chmod +x /usr/local/bin/minio
+
+# Install MinIO Client
+RUN curl -fsSL https://dl.min.io/client/mc/release/linux-amd64/mc -o /usr/local/bin/mc \
+    && chmod +x /usr/local/bin/mc
+
+# Install Node.js 20
+RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && \
+    apt-get install -y nodejs && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Copy pre-built binaries and frontend
+COPY --from=fabaid-manager:latest /app/fabaid-server /app/fabaid-server
+COPY --from=fabaid-manager:latest /app/.next /app/.next
+COPY --from=fabaid-manager:latest /app/node_modules /app/node_modules
+COPY --from=fabaid-manager:latest /app/package.json /app/package.json
+COPY --from=fabaid-manager:latest /app/next.config.js /app/next.config.js
+COPY --from=fabaid-manager:latest /app/internal/db/migrations /app/internal/db/migrations
+COPY scripts/restore.sh /app/restore.sh
+
+# Supervisor config to run all services
+COPY deploy/dev/supervisord.conf /etc/supervisor/conf.d/fabaid.conf
+
+# Data volumes
+VOLUME ["/var/lib/postgresql/data", "/data/minio"]
+
+EXPOSE 8080 3000 5432 9000
+
+CMD ["/usr/bin/supervisord", "-c", "/etc/supervisor/conf.d/fabaid.conf"]
