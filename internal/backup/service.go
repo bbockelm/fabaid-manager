@@ -335,9 +335,12 @@ func (s *Service) CreateBackup(ctx context.Context, initiatedBy string) (*models
 
 func (s *Service) addDatabaseDump(tw *tar.Writer) error {
 	// Use --inserts (not COPY) so the output is pure SQL compatible with pgx Exec.
+	// --clean --if-exists drops existing objects before recreating them so restores
+	// work against a database that already has tables (e.g. from migrations).
 	// --no-owner and --no-privileges avoid role-specific commands that may not apply on restore.
 	cmd := exec.Command("pg_dump",
-		"--inserts", "--no-owner", "--no-privileges",
+		"--inserts", "--clean", "--if-exists",
+		"--no-owner", "--no-privileges",
 		s.cfg.DatabaseURL,
 	)
 	var stderr bytes.Buffer
