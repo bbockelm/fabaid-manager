@@ -104,6 +104,13 @@ export default function AdminUsersPage() {
     onError: (e: Error) => setError(e.message),
   });
 
+  const updateDisplayNameMut = useMutation({
+    mutationFn: (vars: { userId: string; display_name: string }) =>
+      api.admin.updateUser(vars.userId, { display_name: vars.display_name }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['admin', 'users'] }),
+    onError: (e: Error) => setError(e.message),
+  });
+
   if (authLoading || isLoading) {
     return <div className="p-6 text-gray-500">Loading...</div>;
   }
@@ -193,6 +200,9 @@ export default function AdminUsersPage() {
                 status: user.status === 'active' ? 'disabled' : 'active',
               })
             }
+            onUpdateDisplayName={(name) =>
+              updateDisplayNameMut.mutate({ userId: user.id, display_name: name })
+            }
           />
         ))}
         {users?.length === 0 && (
@@ -213,6 +223,7 @@ function UserCard({
   onRemoveRole,
   onRemoveIdentity,
   onToggleStatus,
+  onUpdateDisplayName,
 }: {
   user: UserInfo;
   allInstitutions: string[];
@@ -223,6 +234,7 @@ function UserCard({
   onRemoveRole: (role: string) => void;
   onRemoveIdentity: (identityId: string) => void;
   onToggleStatus: () => void;
+  onUpdateDisplayName: (name: string) => void;
 }) {
   const queryClient = useQueryClient();
 
@@ -295,6 +307,12 @@ function UserCard({
 
       {isExpanded && (
         <div className="border-t px-4 py-3 space-y-4 bg-gray-50">
+          {/* Display Name */}
+          <EditableDisplayName
+            currentName={user.display_name}
+            onSave={onUpdateDisplayName}
+          />
+
           {/* Roles */}
           <div>
             <h4 className="text-xs font-semibold text-gray-500 uppercase mb-2">Roles</h4>
@@ -474,6 +492,66 @@ function UserCard({
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+function EditableDisplayName({
+  currentName,
+  onSave,
+}: {
+  currentName: string;
+  onSave: (name: string) => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [name, setName] = useState(currentName);
+
+  if (!editing) {
+    return (
+      <div>
+        <h4 className="text-xs font-semibold text-gray-500 uppercase mb-2">Display Name</h4>
+        <div className="flex items-center gap-2">
+          <span className="text-sm text-gray-800">{currentName}</span>
+          <button
+            onClick={() => { setName(currentName); setEditing(true); }}
+            className="text-xs text-blue-600 hover:underline"
+          >
+            edit
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div>
+      <h4 className="text-xs font-semibold text-gray-500 uppercase mb-2">Display Name</h4>
+      <div className="flex items-center gap-2">
+        <input
+          type="text"
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          className="flex-1 border rounded px-2 py-1 text-sm max-w-xs"
+          autoFocus
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' && name.trim()) { onSave(name.trim()); setEditing(false); }
+            if (e.key === 'Escape') setEditing(false);
+          }}
+        />
+        <button
+          onClick={() => { if (name.trim()) { onSave(name.trim()); setEditing(false); } }}
+          disabled={!name.trim()}
+          className="text-xs px-2 py-1 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50"
+        >
+          Save
+        </button>
+        <button
+          onClick={() => setEditing(false)}
+          className="text-xs px-2 py-1 border rounded hover:bg-gray-100"
+        >
+          Cancel
+        </button>
+      </div>
     </div>
   );
 }

@@ -77,6 +77,11 @@ export default function BudgetOverviewPage() {
     return names;
   }, [grant, subawards]);
 
+  // For subaward admins, restrict to permitted institutions only
+  const visibleInstitutions = isSubawardAdmin
+    ? allInstitutions.filter((name) => permittedInstitutions.includes(name))
+    : allInstitutions;
+
   // Auto-set filter for subaward admins
   useEffect(() => {
     if (isSubawardAdmin && permittedInstitutions.length > 0 && selectedInstitutions.length === 0) {
@@ -109,9 +114,9 @@ export default function BudgetOverviewPage() {
             </p>
           )}
         </div>
-        {allInstitutions.length > 1 && (
+        {visibleInstitutions.length > 1 && (
           <InstitutionFilter
-            allInstitutions={allInstitutions}
+            allInstitutions={visibleInstitutions}
             selected={selectedInstitutions}
             onChange={setSelectedInstitutions}
           />

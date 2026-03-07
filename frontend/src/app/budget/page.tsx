@@ -109,6 +109,13 @@ function BudgetPageInner() {
     }
   }, [activeInst, selectedYear, pathname, router, searchParams]);
 
+  // For subaward admins, only show personnel from their permitted institutions
+  const visiblePersonnel = useMemo(() => {
+    const all = personnel ?? [];
+    if (!isSubawardAdmin || permittedInstitutions.length === 0) return all;
+    return all.filter((p) => p.institution && permittedInstitutions.includes(p.institution));
+  }, [personnel, isSubawardAdmin, permittedInstitutions]);
+
   if (grantLoading || wbsLoading) return <div className="p-4">Loading budget...</div>;
   if (!grantId) return <div className="p-4">No project configured. <Link href="/settings" className="text-nsf-light hover:underline">Set up project</Link></div>;
 
@@ -144,7 +151,7 @@ function BudgetPageInner() {
             <InstitutionBudgetPanel entityType={activeInst.entityType} entityId={activeInst.entityId}
               institutionLabel={activeInst.label} fiscalYear={selectedYear}
               salaryEscalationRate={activeInst.salaryEscalationRate}
-              wbsAreas={wbsAreas ?? []} personnel={personnel ?? []}
+              wbsAreas={wbsAreas ?? []} personnel={visiblePersonnel}
               subawards={subawards ?? []} />
           )}
         </div>

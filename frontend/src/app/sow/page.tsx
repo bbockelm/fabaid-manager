@@ -12,6 +12,7 @@ import {
   Subaward,
 } from '@/lib/api';
 import { useGrant } from '@/lib/grant-context';
+import { useAuth } from '@/lib/auth-context';
 import { useState, useEffect, useCallback } from 'react';
 
 const PROJECT_YEARS = [1, 2, 3, 4, 5];
@@ -77,18 +78,23 @@ export default function SOWPage() {
    ═══════════════════════════════════════════════════════════════════════════════ */
 
 function SubawardSOWList({ grantId }: { grantId: string }) {
+  const { isSubawardAdmin, permittedInstitutions } = useAuth();
   const { data: subawards, isLoading } = useQuery({
     queryKey: ['subawards', grantId],
     queryFn: () => api.subawards.list(grantId),
   });
 
+  const visibleSubawards = isSubawardAdmin && permittedInstitutions.length > 0
+    ? (subawards ?? []).filter((s) => permittedInstitutions.includes(s.institution))
+    : subawards;
+
   if (isLoading) return <div className="text-sm text-gray-500">Loading subawards...</div>;
-  if (!subawards?.length)
+  if (!visibleSubawards?.length)
     return <div className="text-sm text-gray-400">No subawards yet. Add one from the Institutions page.</div>;
 
   return (
     <div className="space-y-6">
-      {subawards.map((sub) => (
+      {visibleSubawards.map((sub) => (
         <SubawardSOWPanel key={sub.id} grantId={grantId} subaward={sub} />
       ))}
     </div>

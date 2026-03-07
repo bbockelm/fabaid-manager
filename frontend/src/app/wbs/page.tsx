@@ -55,9 +55,9 @@ function WBSNode({
   area: WBSArea;
   childMap: Map<string | null, WBSArea[]>;
   depth: number;
-  onEdit: (a: WBSArea) => void;
-  onDelete: (a: WBSArea) => void;
-  onAddChild: (parent: WBSArea) => void;
+  onEdit?: (a: WBSArea) => void;
+  onDelete?: (a: WBSArea) => void;
+  onAddChild?: (parent: WBSArea) => void;
 }) {
   const [collapsed, setCollapsed] = useState(false);
   const children = childMap.get(area.id) ?? [];
@@ -101,27 +101,29 @@ function WBSNode({
         )}
 
         {/* actions */}
+        {(onAddChild || onEdit || onDelete) && (
         <div className="hidden group-hover:flex items-center gap-1 flex-shrink-0">
-          <button
+          {onAddChild && <button
             onClick={() => onAddChild(area)}
             className="text-xs text-blue-600 hover:underline"
             title="Add child WBS"
           >
             + child
-          </button>
-          <button
+          </button>}
+          {onEdit && <button
             onClick={() => onEdit(area)}
             className="text-xs text-gray-600 hover:underline"
           >
             edit
-          </button>
-          <button
+          </button>}
+          {onDelete && <button
             onClick={() => onDelete(area)}
             className="text-xs text-red-500 hover:underline"
           >
             delete
-          </button>
+          </button>}
         </div>
+        )}
       </div>
 
       {/* description */}
@@ -527,7 +529,8 @@ function DefaultWBSEditor({
 
 export default function WBSPage() {
   const { grant, grantId, isLoading: grantLoading } = useGrant();
-  const { isSubawardAdmin, permittedInstitutions } = useAuth();
+  const { isAdmin, isGrantAdmin, isSubawardAdmin, permittedInstitutions } = useAuth();
+  const canEditWBS = isAdmin || isGrantAdmin;
   const queryClient = useQueryClient();
 
   // Active tab: 'tree' | 'effort' | 'defaults'
@@ -651,7 +654,7 @@ export default function WBSPage() {
     <div className="p-6 max-w-6xl">
       <div className="flex items-center justify-between mb-4">
         <h1 className="text-2xl font-bold">WBS Areas</h1>
-        {tab === 'tree' && (
+        {tab === 'tree' && canEditWBS && (
           <button
             onClick={() => {
               setEditingArea(undefined);
@@ -701,7 +704,7 @@ export default function WBSPage() {
 
           {roots.length === 0 && !showForm ? (
             <p className="text-sm text-gray-500 italic">
-              No WBS areas defined yet. Click &quot;+ New WBS Area&quot; to create the first one.
+              No WBS areas defined yet.{canEditWBS && ' Click "+ New WBS Area" to create the first one.'}
             </p>
           ) : (
             <div className="bg-white border rounded-lg divide-y">
@@ -711,9 +714,9 @@ export default function WBSPage() {
                   area={area}
                   childMap={childMap}
                   depth={0}
-                  onEdit={handleEdit}
-                  onDelete={handleDelete}
-                  onAddChild={handleAddChild}
+                  onEdit={canEditWBS ? handleEdit : undefined}
+                  onDelete={canEditWBS ? handleDelete : undefined}
+                  onAddChild={canEditWBS ? handleAddChild : undefined}
                 />
               ))}
             </div>
@@ -752,7 +755,9 @@ export default function WBSPage() {
             <p className="text-sm text-gray-500 italic">No personnel on this grant.</p>
           ) : (
             <div className="space-y-6">
-              {allInstitutions.map((inst) => {
+              {allInstitutions
+                .filter((inst) => !isSubawardAdmin || permittedInstitutions.includes(inst))
+                .map((inst) => {
                 const people = personnel.filter((p) => p.institution === inst);
                 if (people.length === 0) return null;
                 return (

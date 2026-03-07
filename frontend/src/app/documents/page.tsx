@@ -7,6 +7,7 @@ import {
   InstitutionBudget,
 } from '@/lib/api';
 import { useGrant } from '@/lib/grant-context';
+import { useAuth } from '@/lib/auth-context';
 import { useState, useMemo, useRef } from 'react';
 import Link from 'next/link';
 
@@ -31,6 +32,7 @@ interface InstitutionOption {
 
 export default function DocumentsPage() {
   const { grantId, isLoading: grantLoading } = useGrant();
+  const { isSubawardAdmin, permittedInstitutions } = useAuth();
   const [selectedInst, setSelectedInst] = useState<string>('');
   const [showDeleted, setShowDeleted] = useState(false);
 
@@ -45,12 +47,20 @@ export default function DocumentsPage() {
     enabled: !!grantId,
   });
 
-  const institutions = useMemo<InstitutionOption[]>(() => {
+  const allInstitutions = useMemo<InstitutionOption[]>(() => {
     const opts: InstitutionOption[] = [];
     if (grant) opts.push({ entityType: 'grant', entityId: grant.id, label: `${grant.institution} (Lead)` });
     for (const s of subawards ?? []) opts.push({ entityType: 'subaward', entityId: s.id, label: s.institution });
     return opts;
   }, [grant, subawards]);
+
+  // Subaward admins can only see their own institutions' documents
+  const institutions = useMemo(() => {
+    if (!isSubawardAdmin || permittedInstitutions.length === 0) return allInstitutions;
+    return allInstitutions.filter((i) =>
+      permittedInstitutions.some((p) => i.label.startsWith(p))
+    );
+  }, [allInstitutions, isSubawardAdmin, permittedInstitutions]);
 
   const activeInst = institutions.find((i) => `${i.entityType}:${i.entityId}` === selectedInst) || institutions[0];
 
