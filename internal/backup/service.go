@@ -334,10 +334,15 @@ func (s *Service) CreateBackup(ctx context.Context, initiatedBy string) (*models
 }
 
 func (s *Service) addDatabaseDump(tw *tar.Writer) error {
-	cmd := exec.Command("pg_dump", s.cfg.DatabaseURL)
+	// Use --inserts (not COPY) so the output is pure SQL compatible with pgx Exec.
+	// --no-owner and --no-privileges avoid role-specific commands that may not apply on restore.
+	cmd := exec.Command("pg_dump",
+		"--inserts", "--no-owner", "--no-privileges",
+		s.cfg.DatabaseURL,
+	)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
-	output, err := cmd.Output()
+	raw, err := cmd.Output()
 	if err != nil {
 		detail := strings.TrimSpace(stderr.String())
 		if detail != "" {
@@ -345,6 +350,18 @@ func (s *Service) addDatabaseDump(tw *tar.Writer) error {
 		}
 		return fmt.Errorf("pg_dump: %w", err)
 	}
+
+	// Strip psql-specific backslash meta-commands (e.g. \set, \connect) that
+	// are not valid SQL and would cause errors when replayed via pgx Exec.
+	var filtered bytes.Buffer
+	for _, line := range strings.Split(string(raw), "\n") {
+		if strings.HasPrefix(line, "\\") {
+			continue
+		}
+		filtered.WriteString(line)
+		filtered.WriteByte('\n')
+	}
+	output := filtered.Bytes()
 
 	header := &tar.Header{
 		Name:    "database/fabaid.sql",
