@@ -23,6 +23,8 @@ RUN apk add --no-cache ca-certificates
 WORKDIR /app
 COPY --from=go-builder /fabaid-server .
 
+ENV APP_ENV=production
+
 EXPOSE 8080
 
 CMD ["./fabaid-server"]

@@ -17,12 +17,16 @@ func Connect(ctx context.Context, databaseURL string) (*pgxpool.Pool, error) {
 
 	poolCfg.MaxConns = 10
 
-	pool, err := pgxpool.NewWithConfig(ctx, poolCfg)
+	connectCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+
+	pool, err := pgxpool.NewWithConfig(connectCtx, poolCfg)
 	if err != nil {
 		return nil, fmt.Errorf("creating connection pool: %w", err)
 	}
 
-	if err := pool.Ping(ctx); err != nil {
+	if err := pool.Ping(connectCtx); err != nil {
+		pool.Close()
 		return nil, fmt.Errorf("pinging database: %w", err)
 	}
 
