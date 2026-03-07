@@ -637,11 +637,8 @@ func (s *Service) restoreFromData(ctx context.Context, data []byte, encrypted bo
 	// Apply SQL dump
 	if sqlDump != nil {
 		log.Info().Msg("Restore: applying database dump")
-		cmd := exec.Command("psql", s.cfg.DatabaseURL)
-		cmd.Stdin = bytes.NewReader(sqlDump)
-		output, err := cmd.CombinedOutput()
-		if err != nil {
-			return fmt.Errorf("restoring database: %w\n%s", err, string(output))
+		if err := s.queries.ExecRaw(ctx, string(sqlDump)); err != nil {
+			return fmt.Errorf("restoring database: %w", err)
 		}
 		log.Info().Msg("Restore: database dump applied")
 	}

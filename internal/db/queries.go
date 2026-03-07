@@ -19,6 +19,12 @@ func NewQueries(pool *pgxpool.Pool) *Queries {
 	return &Queries{pool: pool}
 }
 
+// ExecRaw executes a raw SQL string against the database.
+func (q *Queries) ExecRaw(ctx context.Context, sql string) error {
+	_, err := q.pool.Exec(ctx, sql)
+	return err
+}
+
 // --- Grants ---
 
 func (q *Queries) ListGrants(ctx context.Context) ([]models.Grant, error) {

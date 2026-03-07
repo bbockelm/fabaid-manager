@@ -19,7 +19,7 @@ RUN CGO_ENABLED=0 GOOS=linux go build -tags embed_frontend -o /fabaid-server ./c
 
 # --- Production image ---
 FROM alpine:3.20
-RUN apk add --no-cache ca-certificates
+RUN apk add --no-cache ca-certificates postgresql16-client
 WORKDIR /app
 COPY --from=go-builder /fabaid-server .
 
