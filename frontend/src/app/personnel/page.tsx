@@ -3,7 +3,9 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api, Personnel, PersonnelBudgetEntry } from '@/lib/api';
 import { useGrant } from '@/lib/grant-context';
-import { useState, useMemo, useRef, useEffect } from 'react';
+import { useAuth } from '@/lib/auth-context';
+import { useState, useMemo, useRef, useEffect, Suspense } from 'react';
+import { useSearchParams } from 'next/navigation';
 import CurrencyInput from '@/components/CurrencyInput';
 import Link from 'next/link';
 
@@ -26,11 +28,23 @@ const ROLE_LABEL_MAP: Record<string, string> = Object.fromEntries(
 );
 
 export default function PersonnelPage() {
+  return (
+    <Suspense fallback={<div className="p-4">Loading personnel...</div>}>
+      <PersonnelPageInner />
+    </Suspense>
+  );
+}
+
+function PersonnelPageInner() {
   const { grantId, isLoading: grantLoading } = useGrant();
+  const { isSubawardAdmin, permittedInstitutions } = useAuth();
   const queryClient = useQueryClient();
+  const searchParams = useSearchParams();
+  const focusPersonId = searchParams.get('person');
   const [showForm, setShowForm] = useState(false);
-  const [editingId, setEditingId] = useState<string | null>(null);
-  const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [editingId, setEditingId] = useState<string | null>(focusPersonId);
+  const [expandedId, setExpandedId] = useState<string | null>(focusPersonId);
+  const didScroll = useRef(false);
 
   const { data: grant } = useQuery({
     queryKey: ['grant', grantId],
@@ -51,12 +65,22 @@ export default function PersonnelPage() {
   });
 
   // Build unique list of institutions from lead grant + subawards
-  const institutions = useMemo(() => {
+  const allInstitutions = useMemo(() => {
     const set = new Set<string>();
     if (grant?.institution) set.add(grant.institution);
     subawards?.forEach((s) => { if (s.institution) set.add(s.institution); });
     return Array.from(set).sort();
   }, [grant, subawards]);
+
+  // Subaward admins only see their permitted institutions
+  const institutions = isSubawardAdmin
+    ? allInstitutions.filter((i) => permittedInstitutions.includes(i))
+    : allInstitutions;
+
+  // Filter personnel for subaward admins
+  const visiblePersonnel = isSubawardAdmin
+    ? (personnel ?? []).filter((p) => permittedInstitutions.includes(p.institution || ''))
+    : personnel;
 
   const createMutation = useMutation({
     mutationFn: (data: Partial<Personnel>) => api.personnel.create(grantId!, data),
@@ -112,45 +136,104 @@ export default function PersonnelPage() {
         />
       )}
 
-      <div className="bg-white rounded-lg border overflow-hidden">
-        <table className="w-full">
-          <thead className="bg-gray-50 border-b">
-            <tr>
-              <th className="w-6 px-2"></th>
-              <th className="text-left px-4 py-3 text-sm font-medium text-gray-600">Name</th>
-              <th className="text-left px-4 py-3 text-sm font-medium text-gray-600">Role</th>
-              <th className="text-left px-4 py-3 text-sm font-medium text-gray-600">Title</th>
-              <th className="text-left px-4 py-3 text-sm font-medium text-gray-600">Institution</th>
-              <th className="text-center px-4 py-3 text-sm font-medium text-gray-600">Actions</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y">
-            {personnel?.map((p) => (
-              <PersonnelRow
-                key={p.id}
-                person={p}
-                expanded={expandedId === p.id}
-                editing={editingId === p.id}
-                grantId={grantId}
-                institutions={institutions}
-                onToggleExpand={() => setExpandedId(expandedId === p.id ? null : p.id)}
-                onEdit={() => setEditingId(editingId === p.id ? null : p.id)}
-                onUpdate={(data) => updateMutation.mutate({ id: p.id, data })}
-                onDelete={() => {
-                  if (confirm(`Delete ${p.name}?`)) deleteMutation.mutate(p.id);
-                }}
-                isUpdating={updateMutation.isPending}
-              />
-            ))}
-            {(!personnel || personnel.length === 0) && (
-              <tr>
-                <td colSpan={6} className="px-4 py-8 text-center text-gray-400">
-                  No personnel yet. Click &quot;+ Add Person&quot; to get started.
-                </td>
-              </tr>
-            )}
-          </tbody>
-        </table>
+      <div className="space-y-6">
+        {institutions.map((inst) => {
+          const people = (visiblePersonnel ?? []).filter((p) => p.institution === inst);
+          return (
+            <div key={inst} className="bg-white rounded-lg border overflow-hidden">
+              <div className="px-4 py-3 bg-gray-50 border-b flex items-center gap-2">
+                <h2 className="text-sm font-semibold text-nsf-blue">{inst}</h2>
+                <span className="text-xs text-gray-400">({people.length} {people.length === 1 ? 'person' : 'people'})</span>
+              </div>
+              <table className="w-full">
+                <thead className="bg-gray-50/50 border-b">
+                  <tr>
+                    <th className="w-6 px-2"></th>
+                    <th className="text-left px-4 py-3 text-sm font-medium text-gray-600">Name</th>
+                    <th className="text-left px-4 py-3 text-sm font-medium text-gray-600">Role</th>
+                    <th className="text-left px-4 py-3 text-sm font-medium text-gray-600">Title</th>
+                    <th className="text-right px-4 py-3 text-sm font-medium text-gray-600">Salary</th>
+                    <th className="text-center px-4 py-3 text-sm font-medium text-gray-600">Actions</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y">
+                  {people.map((p) => (
+                    <PersonnelRow
+                      key={p.id}
+                      person={p}
+                      expanded={expandedId === p.id}
+                      editing={editingId === p.id}
+                      grantId={grantId}
+                      institutions={institutions}
+                      isFocused={p.id === focusPersonId && !didScroll.current}
+                      onFocused={() => { didScroll.current = true; }}
+                      onToggleExpand={() => setExpandedId(expandedId === p.id ? null : p.id)}
+                      onEdit={() => setEditingId(editingId === p.id ? null : p.id)}
+                      onUpdate={(data) => updateMutation.mutate({ id: p.id, data })}
+                      onDelete={() => {
+                        if (confirm(`Delete ${p.name}?`)) deleteMutation.mutate(p.id);
+                      }}
+                      isUpdating={updateMutation.isPending}
+                    />
+                  ))}
+                  {people.length === 0 && (
+                    <tr>
+                      <td colSpan={6} className="px-4 py-4 text-center text-gray-400 text-sm">
+                        No personnel at this institution.
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          );
+        })}
+        {/* Unassigned personnel */}
+        {(visiblePersonnel ?? []).some((p) => !p.institution || !institutions.includes(p.institution)) && (
+          <div className="bg-white rounded-lg border overflow-hidden">
+            <div className="px-4 py-3 bg-gray-50 border-b">
+              <h2 className="text-sm font-semibold text-gray-500">Unassigned</h2>
+            </div>
+            <table className="w-full">
+              <thead className="bg-gray-50/50 border-b">
+                <tr>
+                  <th className="w-6 px-2"></th>
+                  <th className="text-left px-4 py-3 text-sm font-medium text-gray-600">Name</th>
+                  <th className="text-left px-4 py-3 text-sm font-medium text-gray-600">Role</th>
+                  <th className="text-left px-4 py-3 text-sm font-medium text-gray-600">Title</th>
+                  <th className="text-right px-4 py-3 text-sm font-medium text-gray-600">Salary</th>
+                  <th className="text-center px-4 py-3 text-sm font-medium text-gray-600">Actions</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y">
+                {(visiblePersonnel ?? []).filter((p) => !p.institution || !institutions.includes(p.institution)).map((p) => (
+                  <PersonnelRow
+                    key={p.id}
+                    person={p}
+                    expanded={expandedId === p.id}
+                    editing={editingId === p.id}
+                    grantId={grantId}
+                    institutions={institutions}
+                    isFocused={p.id === focusPersonId && !didScroll.current}
+                    onFocused={() => { didScroll.current = true; }}
+                    onToggleExpand={() => setExpandedId(expandedId === p.id ? null : p.id)}
+                    onEdit={() => setEditingId(editingId === p.id ? null : p.id)}
+                    onUpdate={(data) => updateMutation.mutate({ id: p.id, data })}
+                    onDelete={() => {
+                      if (confirm(`Delete ${p.name}?`)) deleteMutation.mutate(p.id);
+                    }}
+                    isUpdating={updateMutation.isPending}
+                  />
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+        {(!visiblePersonnel || visiblePersonnel.length === 0) && institutions.length === 0 && (
+          <div className="bg-white rounded-lg border p-8 text-center text-gray-400">
+            No personnel yet. Click &quot;+ Add Person&quot; to get started.
+          </div>
+        )}
       </div>
     </div>
   );
@@ -164,6 +247,8 @@ function PersonnelRow({
   editing,
   grantId,
   institutions,
+  isFocused,
+  onFocused,
   onToggleExpand,
   onEdit,
   onUpdate,
@@ -175,6 +260,8 @@ function PersonnelRow({
   editing: boolean;
   grantId: string;
   institutions: string[];
+  isFocused?: boolean;
+  onFocused?: () => void;
   onToggleExpand: () => void;
   onEdit: () => void;
   onUpdate: (data: Partial<Personnel>) => void;
@@ -182,11 +269,20 @@ function PersonnelRow({
   isUpdating: boolean;
 }) {
   const roleLabel = ROLE_LABEL_MAP[person.role] ?? person.role;
+  const rowRef = useRef<HTMLTableRowElement>(null);
+
+  useEffect(() => {
+    if (isFocused && rowRef.current) {
+      rowRef.current.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      onFocused?.();
+    }
+  }, [isFocused, onFocused]);
 
   return (
     <>
       <tr
-        className={`hover:bg-gray-50 cursor-pointer ${expanded ? 'bg-blue-50/40' : ''}`}
+        ref={rowRef}
+        className={`hover:bg-gray-50 cursor-pointer ${expanded ? 'bg-blue-50/40' : ''} ${isFocused ? 'ring-2 ring-nsf-light ring-inset' : ''}`}
         onClick={onToggleExpand}
       >
         <td className="px-2 text-gray-400 text-xs select-none">{expanded ? '▼' : '▶'}</td>
@@ -197,7 +293,7 @@ function PersonnelRow({
           </span>
         </td>
         <td className="px-4 py-3 text-sm text-gray-600">{person.title || '—'}</td>
-        <td className="px-4 py-3 text-sm text-gray-600">{person.institution || '—'}</td>
+        <td className="px-4 py-3 text-sm text-gray-600 text-right">${person.annual_salary.toLocaleString()}</td>
         <td className="px-4 py-3 text-sm text-center space-x-2" onClick={(e) => e.stopPropagation()}>
           <button onClick={onEdit} className="text-nsf-light hover:underline text-xs">
             {editing ? 'Cancel' : 'Edit'}
@@ -294,25 +390,41 @@ function PersonnelDetail({ person, grantId }: { person: Personnel; grantId: stri
                   <thead>
                     <tr className="border-b">
                       <th className="text-left py-1 text-gray-500 font-medium">Year</th>
+                      <th className="text-right py-1 text-gray-500 font-medium">Base Salary</th>
                       <th className="text-right py-1 text-gray-500 font-medium">Effort (mo)</th>
-                      <th className="text-right py-1 text-gray-500 font-medium">Amount</th>
+                      <th className="text-right py-1 text-gray-500 font-medium">Salary</th>
+                      <th className="text-right py-1 text-gray-500 font-medium">Fringe</th>
+                      <th className="text-right py-1 text-gray-500 font-medium">Fully Loaded</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {entries.map((e) => (
-                      <tr key={e.fiscal_year} className="border-b border-gray-100">
-                        <td className="py-1">Year {e.fiscal_year}</td>
-                        <td className="py-1 text-right">{e.effort_months.toFixed(1)}</td>
-                        <td className="py-1 text-right">${e.amount.toLocaleString()}</td>
-                      </tr>
-                    ))}
+                    {entries.map((e) => {
+                      const escalated = person.annual_salary * Math.pow(1 + (e.salary_escalation_rate || 0), e.fiscal_year - 1);
+                      return (
+                        <tr key={e.fiscal_year} className="border-b border-gray-100">
+                          <td className="py-1">Year {e.fiscal_year}</td>
+                          <td className="py-1 text-right">${escalated.toLocaleString(undefined, { maximumFractionDigits: 0 })}</td>
+                          <td className="py-1 text-right">{e.effort_months.toFixed(1)}</td>
+                          <td className="py-1 text-right">${e.salary_amount.toLocaleString()}</td>
+                          <td className="py-1 text-right">${e.fringe_amount.toLocaleString()}</td>
+                          <td className="py-1 text-right">${(e.salary_amount + e.fringe_amount).toLocaleString()}</td>
+                        </tr>
+                      );
+                    })}
                     <tr className="font-medium">
                       <td className="py-1">Total</td>
+                      <td className="py-1"></td>
                       <td className="py-1 text-right">
                         {entries.reduce((s, e) => s + e.effort_months, 0).toFixed(1)}
                       </td>
                       <td className="py-1 text-right">
-                        ${entries.reduce((s, e) => s + e.amount, 0).toLocaleString()}
+                        ${entries.reduce((s, e) => s + e.salary_amount, 0).toLocaleString()}
+                      </td>
+                      <td className="py-1 text-right">
+                        ${entries.reduce((s, e) => s + e.fringe_amount, 0).toLocaleString()}
+                      </td>
+                      <td className="py-1 text-right">
+                        ${entries.reduce((s, e) => s + e.salary_amount + e.fringe_amount, 0).toLocaleString()}
                       </td>
                     </tr>
                   </tbody>

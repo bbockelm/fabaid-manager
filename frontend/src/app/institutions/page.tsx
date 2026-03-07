@@ -13,8 +13,16 @@ import {
   OverheadRate,
 } from '@/lib/api';
 import { useGrant } from '@/lib/grant-context';
+import { useAuth } from '@/lib/auth-context';
 import { useState, useMemo, useCallback } from 'react';
 import Link from 'next/link';
+
+const ROLE_LABELS: Record<string, string> = {
+  pi: 'PI', co_pi: 'Co-PI', subaward_pi: 'Subaward PI',
+  senior_personnel: 'Senior Personnel', postdoc: 'Postdoc',
+  other_professional: 'Other Professional', graduate_student: 'Graduate Student',
+  undergraduate_student: 'Undergraduate Student', clerical: 'Clerical', other: 'Other',
+};
 import CurrencyInput from '@/components/CurrencyInput';
 
 const PROJECT_YEARS = [1, 2, 3, 4, 5];
@@ -28,6 +36,7 @@ const YEAR_LABELS: Record<number, string> = {
 
 export default function InstitutionsPage() {
   const { grant, grantId, isLoading: grantLoading } = useGrant();
+  const { isSubawardAdmin, isReadOnly, permittedInstitutions } = useAuth();
   const queryClient = useQueryClient();
   const [showForm, setShowForm] = useState(false);
   const [expandedId, setExpandedId] = useState<string | null>(null);
@@ -81,21 +90,31 @@ export default function InstitutionsPage() {
 
   const totalSubawards = (subawards ?? []).reduce((sum, s) => sum + s.total_amount, 0);
 
+  // Subaward admins only see their permitted institutions
+  const canManageAll = !isSubawardAdmin;
+  const visibleSubawards = isSubawardAdmin
+    ? (subawards ?? []).filter((s) => permittedInstitutions.includes(s.institution))
+    : (subawards ?? []);
+  const showLead = !isSubawardAdmin || permittedInstitutions.includes(grant.institution);
+
   return (
     <div className="max-w-6xl space-y-6">
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold text-nsf-blue">Institutions</h1>
           <p className="text-sm text-gray-500">
-            Lead institution + {subawards?.length ?? 0} subaward institution{(subawards?.length ?? 0) !== 1 ? 's' : ''} · Subaward total: ${totalSubawards.toLocaleString()}
+            {showLead ? 'Lead institution + ' : ''}{visibleSubawards.length} subaward institution{visibleSubawards.length !== 1 ? 's' : ''}
+            {canManageAll && <> · Subaward total: ${totalSubawards.toLocaleString()}</>}
           </p>
         </div>
-        <button
-          onClick={() => setShowForm(!showForm)}
-          className="px-4 py-2 bg-nsf-light text-white rounded-md hover:bg-nsf-blue transition-colors"
-        >
-          {showForm ? 'Cancel' : '+ Add Subaward Institution'}
-        </button>
+        {canManageAll && (
+          <button
+            onClick={() => setShowForm(!showForm)}
+            className="px-4 py-2 bg-nsf-light text-white rounded-md hover:bg-nsf-blue transition-colors"
+          >
+            {showForm ? 'Cancel' : '+ Add Subaward Institution'}
+          </button>
+        )}
       </div>
 
       {showForm && (
@@ -107,16 +126,18 @@ export default function InstitutionsPage() {
       )}
 
       {/* Lead Institution */}
-      <LeadInstitutionCard
-        grant={grant}
-        expanded={leadExpanded}
-        onToggle={() => setLeadExpanded(!leadExpanded)}
-        personnel={personnelByInstitution[grant.institution] ?? []}
-      />
+      {showLead && (
+        <LeadInstitutionCard
+          grant={grant}
+          expanded={leadExpanded}
+          onToggle={() => setLeadExpanded(!leadExpanded)}
+          personnel={personnelByInstitution[grant.institution] ?? []}
+        />
+      )}
 
       {/* Subaward Institutions */}
       <div className="space-y-4">
-        {subawards?.map((sub) => (
+        {visibleSubawards.map((sub) => (
           <SubawardCard
             key={sub.id}
             subaward={sub}
@@ -129,9 +150,11 @@ export default function InstitutionsPage() {
             }}
           />
         ))}
-        {(!subawards || subawards.length === 0) && (
+        {visibleSubawards.length === 0 && (
           <div className="bg-white rounded-lg border p-8 text-center text-gray-400">
-            No subaward institutions yet. Click &quot;+ Add Subaward Institution&quot; to add one.
+            {isSubawardAdmin
+              ? 'No institutions assigned to your account. Contact an administrator.'
+              : 'No subaward institutions yet. Click "+ Add Subaward Institution" to add one.'}
           </div>
         )}
       </div>
@@ -173,7 +196,19 @@ function LeadInstitutionCard({
   onToggle: () => void;
   personnel: Personnel[];
 }) {
+  const queryClient = useQueryClient();
   const [tab, setTab] = useState<'personnel' | 'rates' | 'budgets'>('personnel');
+  const [editingEscalation, setEditingEscalation] = useState(false);
+  const [escalationValue, setEscalationValue] = useState((grant.salary_escalation_rate ?? 0) * 100);
+
+  const updateGrant = useMutation({
+    mutationFn: (data: Partial<Grant>) => api.grants.update(grant.id, data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['grants'] });
+      queryClient.invalidateQueries({ queryKey: ['grant', grant.id] });
+      setEditingEscalation(false);
+    },
+  });
 
   return (
     <div className="bg-white rounded-lg border overflow-hidden border-nsf-blue/30">
@@ -190,6 +225,26 @@ function LeadInstitutionCard({
           </div>
           <p className="text-sm text-gray-500">
             PI: {grant.pi_name}
+            {' · Salary escalation: '}
+            {editingEscalation ? (
+              <span onClick={(e) => e.stopPropagation()} className="inline-flex items-center gap-1">
+                <input type="number" step="0.1" min="0" max="20"
+                  value={escalationValue || ''}
+                  onChange={(e) => setEscalationValue(parseFloat(e.target.value) || 0)}
+                  className="w-16 border rounded px-1 py-0.5 text-xs" autoFocus />
+                <span className="text-xs">%</span>
+                <button onClick={() => updateGrant.mutate({ salary_escalation_rate: escalationValue / 100 })}
+                  className="text-xs text-green-600 hover:underline">Save</button>
+                <button onClick={() => { setEditingEscalation(false); setEscalationValue((grant.salary_escalation_rate ?? 0) * 100); }}
+                  className="text-xs text-gray-400 hover:underline">Cancel</button>
+              </span>
+            ) : (
+              <span>
+                {((grant.salary_escalation_rate ?? 0) * 100).toFixed(1)}%
+                <button onClick={(e) => { e.stopPropagation(); setEditingEscalation(true); }}
+                  className="ml-1 text-xs text-nsf-light hover:underline">edit</button>
+              </span>
+            )}
             {personnel.length > 0 ? ` · ${personnel.length} personnel` : ''}
           </p>
         </div>
@@ -258,7 +313,18 @@ function SubawardCard({
   onToggle: () => void;
   onDelete: () => void;
 }) {
+  const queryClient = useQueryClient();
   const [tab, setTab] = useState<'personnel' | 'rates' | 'budgets' | 'invoices' | 'sow'>('personnel');
+  const [editingEscalation, setEditingEscalation] = useState(false);
+  const [escalationValue, setEscalationValue] = useState((subaward.salary_escalation_rate ?? 0) * 100);
+
+  const updateSubaward = useMutation({
+    mutationFn: (data: Partial<Subaward>) => api.subawards.update(grantId, subaward.id, data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['subawards', grantId] });
+      setEditingEscalation(false);
+    },
+  });
 
   return (
     <div className="bg-white rounded-lg border overflow-hidden">
@@ -277,6 +343,26 @@ function SubawardCard({
           <p className="text-sm text-gray-500">
             Sub-PI: {subaward.pi_name} · ${subaward.total_amount.toLocaleString()}
             {' · '}{subaward.start_date} to {subaward.end_date}
+            {' · Salary escalation: '}
+            {editingEscalation ? (
+              <span onClick={(e) => e.stopPropagation()} className="inline-flex items-center gap-1">
+                <input type="number" step="0.1" min="0" max="20"
+                  value={escalationValue || ''}
+                  onChange={(e) => setEscalationValue(parseFloat(e.target.value) || 0)}
+                  className="w-16 border rounded px-1 py-0.5 text-xs" autoFocus />
+                <span className="text-xs">%</span>
+                <button onClick={() => updateSubaward.mutate({ salary_escalation_rate: escalationValue / 100 })}
+                  className="text-xs text-green-600 hover:underline">Save</button>
+                <button onClick={() => { setEditingEscalation(false); setEscalationValue((subaward.salary_escalation_rate ?? 0) * 100); }}
+                  className="text-xs text-gray-400 hover:underline">Cancel</button>
+              </span>
+            ) : (
+              <span>
+                {((subaward.salary_escalation_rate ?? 0) * 100).toFixed(1)}%
+                <button onClick={(e) => { e.stopPropagation(); setEditingEscalation(true); }}
+                  className="ml-1 text-xs text-nsf-light hover:underline">edit</button>
+              </span>
+            )}
             {personnel.length > 0 ? ` · ${personnel.length} personnel` : ''}
           </p>
         </div>
@@ -359,7 +445,7 @@ function PersonnelPanel({ personnel, institution }: { personnel: Personnel[]; in
           {personnel.map((p) => (
             <tr key={p.id}>
               <td className="px-3 py-2 font-medium">{p.name}</td>
-              <td className="px-3 py-2">{p.role}</td>
+              <td className="px-3 py-2">{ROLE_LABELS[p.role] ?? p.role}</td>
               <td className="px-3 py-2">{p.title || '—'}</td>
               <td className="px-3 py-2 text-right">${p.annual_salary.toLocaleString()}</td>
             </tr>
@@ -1034,6 +1120,7 @@ function SOWPanel({ grantId, subawardId }: { grantId: string; subawardId: string
             <th className="text-right px-3 py-2 font-medium text-gray-600">Budget</th>
             <th className="text-left px-3 py-2 font-medium text-gray-600">Status</th>
             <th className="text-left px-3 py-2 font-medium text-gray-600">Scope</th>
+            <th className="text-right px-3 py-2 font-medium text-gray-600">Actions</th>
           </tr>
         </thead>
         <tbody className="divide-y">
@@ -1041,13 +1128,29 @@ function SOWPanel({ grantId, subawardId }: { grantId: string; subawardId: string
             <tr key={sow.id}>
               <td className="px-3 py-2">{YEAR_LABELS[sow.fiscal_year] ?? `Year ${sow.fiscal_year}`}</td>
               <td className="px-3 py-2">{sow.period_start} — {sow.period_end}</td>
-              <td className="px-3 py-2 text-right">${sow.budget_amount.toLocaleString()}</td>
+              <td className="px-3 py-2 text-right">{sow.budget_id ? 'Linked' : '—'}</td>
               <td className="px-3 py-2"><StatusBadge status={sow.status} /></td>
               <td className="px-3 py-2 max-w-xs truncate">{sow.scope_text || '—'}</td>
+              <td className="px-3 py-2 text-right space-x-2 whitespace-nowrap">
+                <a
+                  href="/sow"
+                  className="text-nsf-light hover:underline"
+                >
+                  Edit
+                </a>
+                <a
+                  href={api.sow.renderUrl(grantId, subawardId, sow.id)}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-nsf-light hover:underline"
+                >
+                  Preview
+                </a>
+              </td>
             </tr>
           ))}
           {(!sows || sows.length === 0) && (
-            <tr><td colSpan={5} className="px-3 py-4 text-center text-gray-400">No SOWs yet</td></tr>
+            <tr><td colSpan={6} className="px-3 py-4 text-center text-gray-400">No SOWs yet</td></tr>
           )}
         </tbody>
       </table>
@@ -1068,7 +1171,6 @@ function SOWForm({
     fiscal_year: 1,
     period_start: '',
     period_end: '',
-    budget_amount: 0,
     scope_text: '',
     status: 'draft',
   });
@@ -1096,12 +1198,6 @@ function SOWForm({
           <label className="block text-xs font-medium text-gray-600 mb-1">Period End</label>
           <input type="date" required value={form.period_end}
             onChange={(e) => setForm({ ...form, period_end: e.target.value })}
-            className="w-full border rounded px-2 py-1.5 text-sm" />
-        </div>
-        <div>
-          <label className="block text-xs font-medium text-gray-600 mb-1">Budget ($)</label>
-          <CurrencyInput value={form.budget_amount} required
-            onChange={(val) => setForm({ ...form, budget_amount: val })}
             className="w-full border rounded px-2 py-1.5 text-sm" />
         </div>
         <div className="col-span-2">

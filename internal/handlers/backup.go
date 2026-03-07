@@ -18,6 +18,7 @@ import (
 func (h *Handler) ListBackups(w http.ResponseWriter, r *http.Request) {
 	backups, err := h.queries.ListBackups(r.Context())
 	if err != nil {
+		log.Error().Err(err).Msg("failed to list backups")
 		respondError(w, http.StatusInternalServerError, "failed to list backups")
 		return
 	}
@@ -182,6 +183,7 @@ func (h *Handler) CreateBackupLegacy(w http.ResponseWriter, r *http.Request) {
 	// Trigger a backup synchronously and return it as a download
 	backup, err := h.backupSvc.CreateBackup(r.Context(), "manual")
 	if err != nil {
+		log.Error().Err(err).Msg("backup failed: ")
 		respondError(w, http.StatusInternalServerError, "backup failed: "+err.Error())
 		return
 	}
@@ -189,6 +191,7 @@ func (h *Handler) CreateBackupLegacy(w http.ResponseWriter, r *http.Request) {
 	// Stream the completed backup
 	reader, _, err := h.backupSvc.DownloadBackup(r.Context(), backup.ID)
 	if err != nil {
+		log.Error().Err(err).Msg("download failed: ")
 		respondError(w, http.StatusInternalServerError, "download failed: "+err.Error())
 		return
 	}

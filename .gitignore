@@ -40,3 +40,6 @@ Thumbs.db
 
 # Temporary context files
 reference
+
+# Temporary scripts generated to bootstrap the budget
+/working_scripts

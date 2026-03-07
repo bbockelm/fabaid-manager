@@ -6,6 +6,7 @@ import (
 	"html/template"
 	"math"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -181,6 +182,7 @@ func (h *Handler) RenderNSF1030(w http.ResponseWriter, r *http.Request) {
 		}
 		grant, err := h.queries.GetGrant(ctx, sub.GrantID)
 		if err != nil {
+			log.Error().Err(err).Msg("Failed to get grant")
 			respondError(w, http.StatusInternalServerError, "Failed to get grant")
 			return
 		}
@@ -259,8 +261,10 @@ func (h *Handler) RenderNSF1030(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// For the lead grant, compute subaward totals per year (G.5)
+	// and MTDC contributions (first $25K of each subaward's cumulative costs).
 	subawardTotals := make(map[int]float64)
 	subawardCountPerYear := make(map[int]int)
+	subawardMTDCPerYear := make(map[int]float64)
 	if entityType == "grant" {
 		subs, err := h.queries.ListSubawards(ctx, grantID)
 		if err == nil {
@@ -269,9 +273,29 @@ func (h *Handler) RenderNSF1030(w http.ResponseWriter, r *http.Request) {
 				if err != nil {
 					continue
 				}
+				sort.Slice(subBudgets, func(i, j int) bool {
+					return subBudgets[i].FiscalYear < subBudgets[j].FiscalYear
+				})
+				const mtdcCap = 25000.0
+				cumulative := 0.0
 				for _, sb := range subBudgets {
-					subawardTotals[sb.FiscalYear] += sb.Budget
+					// Use actual line item total instead of the header budget field
+					subLineItems, liErr := h.queries.ListBudgetLineItems(ctx, sb.ID)
+					subTotal := sb.Budget
+					if liErr == nil && len(subLineItems) > 0 {
+						subTotal = 0
+						for _, li := range subLineItems {
+							subTotal += li.Amount
+						}
+					}
+					subawardTotals[sb.FiscalYear] += subTotal
 					subawardCountPerYear[sb.FiscalYear]++
+					// NSF MTDC: first $25K of each subaward is in the F&A base
+					if cumulative < mtdcCap {
+						contribution := math.Min(subTotal, mtdcCap-cumulative)
+						subawardMTDCPerYear[sb.FiscalYear] += contribution
+					}
+					cumulative += subTotal
 				}
 			}
 		}
@@ -287,7 +311,8 @@ func (h *Handler) RenderNSF1030(w http.ResponseWriter, r *http.Request) {
 		page := h.buildNSF1030Page(ctx, year, fmt.Sprintf("Year %d", year),
 			organization, piName, awardNumber, durationMonths,
 			budgetsByYear[year], personnelMap, rateMap,
-			subawardTotals[year], subawardCountPerYear[year])
+			subawardTotals[year], subawardCountPerYear[year],
+			subawardMTDCPerYear[year])
 		pages = append(pages, page)
 	}
 
@@ -339,6 +364,7 @@ func (h *Handler) buildNSF1030Page(
 	personnelMap map[string]*models.Personnel,
 	rateMap map[string]*models.OverheadRate,
 	subawardTotal float64, subawardCount int,
+	subawardMTDC float64,
 ) nsf1030Page {
 	page := nsf1030Page{
 		Organization:   organization,
@@ -541,6 +567,26 @@ func (h *Handler) buildNSF1030Page(
 
 	page.TotalDirectCosts = page.TotalSalWageFringe + page.TotalEquipment +
 		page.DomesticTravel + page.ForeignTravel + page.TotalParticipant + page.TotalOtherDirect
+
+	// Add first $25K of each subaward to the overhead base (NSF MTDC rule).
+	// Assign to the rate with the largest accumulated base, or the first rate available.
+	if subawardMTDC > 0 && len(overheadBases) > 0 {
+		bestID := ""
+		bestBase := -1.0
+		for id, b := range overheadBases {
+			if b > bestBase {
+				bestBase = b
+				bestID = id
+			}
+		}
+		overheadBases[bestID] += subawardMTDC
+	} else if subawardMTDC > 0 {
+		// No line-item bases yet; pick the first defined overhead rate
+		for id := range rateMap {
+			overheadBases[id] = subawardMTDC
+			break
+		}
+	}
 
 	// Compute indirect costs from the overhead bases
 	for rateID, base := range overheadBases {

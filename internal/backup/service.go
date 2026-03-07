@@ -39,9 +39,9 @@ type Service struct {
 // NewService creates a backup service.
 func NewService(cfg *config.Config, queries *db.Queries, store *storage.Store, enc *crypto.Encryptor) *Service {
 	s := &Service{cfg: cfg, queries: queries, store: store, enc: enc}
-	if cfg.DocumentMasterKey != "" {
-		s.masterKeyHex = cfg.DocumentMasterKey
-		if gbk, err := crypto.DeriveBackupKey(cfg.DocumentMasterKey); err == nil {
+	if cfg.InstanceKey != "" {
+		s.masterKeyHex = cfg.InstanceKey
+		if gbk, err := crypto.DeriveBackupKey(cfg.InstanceKey); err == nil {
 			s.generalBackupKey = gbk
 		}
 	}
@@ -81,6 +81,16 @@ func (s *Service) GetSettings(ctx context.Context) models.BackupSettings {
 	secretKey, _ := s.queries.GetAppConfig(ctx, "backup_secret_key")
 	useSSL, _ := s.queries.GetAppConfig(ctx, "backup_use_ssl")
 
+	// Decrypt credentials if they were stored encrypted
+	if s.enc != nil {
+		if dec, err := s.enc.DecryptConfigValue(accessKey); err == nil {
+			accessKey = dec
+		}
+		if dec, err := s.enc.DecryptConfigValue(secretKey); err == nil {
+			secretKey = dec
+		}
+	}
+
 	hours := 0
 	if freq != "" {
 		fmt.Sscanf(freq, "%d", &hours)
@@ -97,12 +107,28 @@ func (s *Service) GetSettings(ctx context.Context) models.BackupSettings {
 
 // SaveSettings persists backup settings to app_config.
 func (s *Service) SaveSettings(ctx context.Context, settings models.BackupSettings) error {
+	// Encrypt credentials if the encryptor is available
+	accessKey := settings.BackupAccessKey
+	secretKey := settings.BackupSecretKey
+	if s.enc != nil {
+		if accessKey != "" {
+			if enc, err := s.enc.EncryptConfigValue(accessKey); err == nil {
+				accessKey = enc
+			}
+		}
+		if secretKey != "" {
+			if enc, err := s.enc.EncryptConfigValue(secretKey); err == nil {
+				secretKey = enc
+			}
+		}
+	}
+
 	pairs := map[string]string{
 		"backup_frequency_hours": fmt.Sprintf("%d", settings.BackupFrequencyHours),
 		"backup_bucket":          settings.BackupBucket,
 		"backup_endpoint":        settings.BackupEndpoint,
-		"backup_access_key":      settings.BackupAccessKey,
-		"backup_secret_key":      settings.BackupSecretKey,
+		"backup_access_key":      accessKey,
+		"backup_secret_key":      secretKey,
 		"backup_use_ssl":         fmt.Sprintf("%t", settings.BackupUseSSL),
 	}
 	for k, v := range pairs {
@@ -336,6 +362,7 @@ func (s *Service) addDatabaseDump(tw *tar.Writer) error {
 }
 
 func (s *Service) addS3Documents(ctx context.Context, tw *tar.Writer) error {
+	// 1. Regular documents (stored unencrypted in S3)
 	docs, err := s.queries.ListAllDocuments(ctx)
 	if err != nil {
 		return fmt.Errorf("listing documents: %w", err)
@@ -372,6 +399,65 @@ func (s *Service) addS3Documents(ctx context.Context, tw *tar.Writer) error {
 			return fmt.Errorf("writing document: %w", err)
 		}
 	}
+
+	// 2. Budget documents (stored encrypted in S3 — decrypt before archiving)
+	budgetDocs, err := s.queries.ListAllBudgetDocuments(ctx)
+	if err != nil {
+		return fmt.Errorf("listing budget documents: %w", err)
+	}
+
+	for _, bdoc := range budgetDocs {
+		reader, err := s.store.Download(ctx, bdoc.S3Key)
+		if err != nil {
+			log.Warn().Err(err).Str("key", bdoc.S3Key).Msg("Skipping budget document in backup")
+			continue
+		}
+
+		ciphertext, err := io.ReadAll(reader)
+		reader.Close()
+		if err != nil {
+			log.Warn().Err(err).Str("key", bdoc.S3Key).Msg("Failed to read budget document")
+			continue
+		}
+
+		// Decrypt if we have an encryptor and the doc has encryption metadata
+		var plaintext []byte
+		if s.enc != nil && len(bdoc.EncryptedDEK) > 0 && len(bdoc.DEKNonce) > 0 {
+			dek, err := s.enc.UnwrapDEK(bdoc.EncryptedDEK, bdoc.DEKNonce)
+			if err != nil {
+				log.Warn().Err(err).Str("key", bdoc.S3Key).Msg("Failed to unwrap DEK for budget document, storing encrypted")
+				plaintext = ciphertext
+			} else {
+				decrypted, err := crypto.Decrypt(dek, ciphertext)
+				if err != nil {
+					log.Warn().Err(err).Str("key", bdoc.S3Key).Msg("Failed to decrypt budget document, storing encrypted")
+					plaintext = ciphertext
+				} else {
+					plaintext = decrypted
+				}
+			}
+		} else {
+			plaintext = ciphertext
+		}
+
+		// Update object hash (of the plaintext)
+		hash := sha256.Sum256(plaintext)
+		s.queries.UpsertObjectHash(ctx, bdoc.S3Key, hex.EncodeToString(hash[:]), int64(len(plaintext)))
+
+		header := &tar.Header{
+			Name:    fmt.Sprintf("budget-documents/%s/%s/%s", bdoc.EntityType, bdoc.EntityID, bdoc.Filename),
+			Mode:    0644,
+			Size:    int64(len(plaintext)),
+			ModTime: bdoc.CreatedAt,
+		}
+		if err := tw.WriteHeader(header); err != nil {
+			return fmt.Errorf("writing header for %s: %w", bdoc.S3Key, err)
+		}
+		if _, err := tw.Write(plaintext); err != nil {
+			return fmt.Errorf("writing budget document: %w", err)
+		}
+	}
+
 	return nil
 }
 

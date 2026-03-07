@@ -17,7 +17,7 @@ import (
 // UploadBudgetDocument handles multipart upload of an encrypted budget document.
 func (h *Handler) UploadBudgetDocument(w http.ResponseWriter, r *http.Request) {
 	if h.encryptor == nil {
-		respondError(w, http.StatusServiceUnavailable, "Document encryption not configured (DOCUMENT_MASTER_KEY missing)")
+		respondError(w, http.StatusServiceUnavailable, "Document encryption not configured (INSTANCE_KEY missing)")
 		return
 	}
 
@@ -52,6 +52,7 @@ func (h *Handler) UploadBudgetDocument(w http.ResponseWriter, r *http.Request) {
 	// Read file into memory for encryption
 	plaintext, err := io.ReadAll(file)
 	if err != nil {
+		log.Error().Err(err).Msg("Failed to read uploaded file")
 		respondError(w, http.StatusInternalServerError, "Failed to read uploaded file")
 		return
 	}

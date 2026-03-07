@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/rs/zerolog/log"
 	"golang.org/x/crypto/bcrypt"
 
 	"github.com/bbockelm/fabaid-manager/internal/models"
@@ -83,12 +84,14 @@ func (h *Handler) CreateAPIKey(w http.ResponseWriter, r *http.Request) {
 
 	rawKey, keyPrefix, err := generateAPIKey()
 	if err != nil {
+		log.Error().Err(err).Msg("Failed to generate key")
 		respondError(w, http.StatusInternalServerError, "Failed to generate key")
 		return
 	}
 
 	hash, err := bcrypt.GenerateFromPassword([]byte(rawKey), bcrypt.DefaultCost)
 	if err != nil {
+		log.Error().Err(err).Msg("Failed to hash key")
 		respondError(w, http.StatusInternalServerError, "Failed to hash key")
 		return
 	}
@@ -103,6 +106,7 @@ func (h *Handler) CreateAPIKey(w http.ResponseWriter, r *http.Request) {
 		ExpiresAt:    expiresAt,
 	}
 	if err := h.queries.CreateAPIKey(r.Context(), k); err != nil {
+		log.Error().Err(err).Msg("Failed to save key")
 		respondError(w, http.StatusInternalServerError, "Failed to save key")
 		return
 	}
@@ -120,6 +124,7 @@ func (h *Handler) CreateAPIKey(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) ListAPIKeys(w http.ResponseWriter, r *http.Request) {
 	keys, err := h.queries.ListAPIKeys(r.Context())
 	if err != nil {
+		log.Error().Err(err).Msg("Failed to list API keys")
 		respondError(w, http.StatusInternalServerError, "Failed to list API keys")
 		return
 	}
@@ -133,6 +138,7 @@ func (h *Handler) ListAPIKeys(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) RevokeAPIKey(w http.ResponseWriter, r *http.Request) {
 	keyID := chi.URLParam(r, "keyID")
 	if err := h.queries.RevokeAPIKey(r.Context(), keyID); err != nil {
+		log.Error().Err(err).Msg("Failed to revoke key")
 		respondError(w, http.StatusInternalServerError, "Failed to revoke key")
 		return
 	}
@@ -143,6 +149,7 @@ func (h *Handler) RevokeAPIKey(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) DeleteAPIKey(w http.ResponseWriter, r *http.Request) {
 	keyID := chi.URLParam(r, "keyID")
 	if err := h.queries.DeleteAPIKey(r.Context(), keyID); err != nil {
+		log.Error().Err(err).Msg("Failed to delete key")
 		respondError(w, http.StatusInternalServerError, "Failed to delete key")
 		return
 	}
@@ -167,7 +174,7 @@ func (h *Handler) RequireAuthOrAPIKey(next http.Handler) http.Handler {
 		// Try cookie-based session first.
 		cookie, err := r.Cookie(sessionCookieName)
 		if err == nil && cookie.Value != "" {
-			session, sErr := h.queries.GetSession(r.Context(), cookie.Value)
+			session, sErr := h.queries.GetSession(r.Context(), hashToken(cookie.Value))
 			if sErr == nil {
 				user, uErr := h.queries.GetUser(r.Context(), session.UserID)
 				if uErr == nil && user.Status == "active" {

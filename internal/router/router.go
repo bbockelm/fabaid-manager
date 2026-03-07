@@ -1,6 +1,8 @@
 package router
 
 import (
+	"net/http"
+
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/cors"
@@ -12,6 +14,7 @@ import (
 	"github.com/bbockelm/fabaid-manager/internal/db"
 	"github.com/bbockelm/fabaid-manager/internal/frontend"
 	"github.com/bbockelm/fabaid-manager/internal/handlers"
+	"github.com/bbockelm/fabaid-manager/internal/openapi"
 	"github.com/bbockelm/fabaid-manager/internal/storage"
 )
 
@@ -40,18 +43,25 @@ func New(cfg *config.Config, pool *pgxpool.Pool, store *storage.Store) (*chi.Mux
 
 	// Initialize document encryption (optional in dev)
 	var enc *crypto.Encryptor
-	if cfg.DocumentMasterKey != "" {
+	if cfg.InstanceKey != "" {
 		var err error
-		enc, err = crypto.NewEncryptor(cfg.DocumentMasterKey)
+		enc, err = crypto.NewEncryptor(cfg.InstanceKey)
 		if err != nil {
 			log.Fatal().Err(err).Msg("Failed to initialize document encryption")
 		}
 		log.Info().Msg("Document encryption enabled")
 	} else {
-		log.Warn().Msg("DOCUMENT_MASTER_KEY not set — encrypted document upload disabled")
+		log.Warn().Msg("INSTANCE_KEY not set — encrypted document upload disabled")
 	}
 
 	h := handlers.New(cfg, queries, store, enc)
+
+	// Serve OpenAPI spec
+	r.Get("/api/v1/openapi.yaml", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/yaml; charset=utf-8")
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Write(openapi.Spec)
+	})
 
 	// API routes
 	r.Route("/api/v1", func(r chi.Router) {
@@ -80,11 +90,30 @@ func New(cfg *config.Config, pool *pgxpool.Pool, store *storage.Store) (*chi.Mux
 			// Grants
 			r.Route("/grants", func(r chi.Router) {
 				r.Get("/", h.ListGrants)
-				r.Post("/", h.CreateGrant)
+				// Only admin/grant_admin can create grants
+				r.Group(func(r chi.Router) {
+					r.Use(handlers.RequireRole(handlers.RoleAdmin, handlers.RoleGrantAdmin))
+					r.Post("/", h.CreateGrant)
+				})
 				r.Route("/{grantID}", func(r chi.Router) {
 					r.Get("/", h.GetGrant)
-					r.Put("/", h.UpdateGrant)
-					r.Delete("/", h.DeleteGrant)
+					// Only admin/grant_admin can modify/delete grants
+					r.Group(func(r chi.Router) {
+						r.Use(handlers.RequireRole(handlers.RoleAdmin, handlers.RoleGrantAdmin))
+						r.Put("/", h.UpdateGrant)
+						r.Delete("/", h.DeleteGrant)
+					})
+
+					// Budget overview (project-wide summary)
+					r.Get("/budget-overview", h.BudgetOverview)
+
+					// SOW Config (per-grant)
+					r.Get("/sow-config", h.GetSOWConfig)
+					// Only admin/grant_admin can modify SOW config
+					r.Group(func(r chi.Router) {
+						r.Use(handlers.RequireRole(handlers.RoleAdmin, handlers.RoleGrantAdmin))
+						r.Put("/sow-config", h.UpsertSOWConfig)
+					})
 
 					// WBS Areas
 					r.Route("/wbs", func(r chi.Router) {
@@ -132,8 +161,22 @@ func New(cfg *config.Config, pool *pgxpool.Pool, store *storage.Store) (*chi.Mux
 							r.Route("/sow", func(r chi.Router) {
 								r.Get("/", h.ListStatementsOfWork)
 								r.Post("/", h.CreateStatementOfWork)
-								r.Put("/{sowID}", h.UpdateStatementOfWork)
-								r.Post("/{sowID}/upload-signed", h.UploadSignedSOW)
+								r.Route("/{sowID}", func(r chi.Router) {
+									r.Put("/", h.UpdateStatementOfWork)
+									r.Delete("/", h.DeleteStatementOfWork)
+									r.Post("/upload-signed", h.UploadSignedSOW)
+									r.Get("/render", h.RenderSOW)
+
+									// Personnel descriptions
+									r.Get("/personnel-descriptions", h.ListSOWPersonnelDescriptions)
+									r.Put("/personnel-descriptions", h.UpsertSOWPersonnelDescription)
+									r.Delete("/personnel-descriptions/{descID}", h.DeleteSOWPersonnelDescription)
+
+									// Line item descriptions
+									r.Get("/line-item-descriptions", h.ListSOWLineItemDescriptions)
+									r.Put("/line-item-descriptions", h.UpsertSOWLineItemDescription)
+									r.Delete("/line-item-descriptions/{descID}", h.DeleteSOWLineItemDescription)
+								})
 							})
 						})
 					})
@@ -192,10 +235,14 @@ func New(cfg *config.Config, pool *pgxpool.Pool, store *storage.Store) (*chi.Mux
 			})
 
 			// Legacy download endpoint (creates + downloads in one request)
-			r.Get("/backup", h.CreateBackupLegacy)
+			r.Group(func(r chi.Router) {
+				r.Use(handlers.RequireRole(handlers.RoleAdmin, handlers.RoleGrantAdmin))
+				r.Get("/backup", h.CreateBackupLegacy)
+			})
 
-			// Backup routes — list is open to all authenticated users; the rest require admin.
+			// Backup routes — require admin or grant_admin.
 			r.Route("/backups", func(r chi.Router) {
+				r.Use(handlers.RequireRole(handlers.RoleAdmin, handlers.RoleGrantAdmin))
 				r.Get("/", h.ListBackups)
 
 				r.Group(func(r chi.Router) {
@@ -215,9 +262,9 @@ func New(cfg *config.Config, pool *pgxpool.Pool, store *storage.Store) (*chi.Mux
 				})
 			})
 
-			// --- Admin-only routes ---
+			// --- Admin / Grant-Admin routes ---
 			r.Group(func(r chi.Router) {
-				r.Use(handlers.RequireRole(handlers.RoleAdmin))
+				r.Use(handlers.RequireRole(handlers.RoleAdmin, handlers.RoleGrantAdmin))
 
 				// User management
 				r.Route("/admin/users", func(r chi.Router) {
@@ -232,6 +279,9 @@ func New(cfg *config.Config, pool *pgxpool.Pool, store *storage.Store) (*chi.Mux
 						r.Post("/invites", h.CreateInviteHandler)
 						r.Get("/invites", h.ListInvitesHandler)
 						r.Delete("/invites/{inviteID}", h.DeleteInviteHandler)
+						r.Get("/institutions", h.ListUserInstitutionsHandler)
+						r.Post("/institutions", h.AddUserInstitutionHandler)
+						r.Delete("/institutions/{institution}", h.RemoveUserInstitutionHandler)
 					})
 				})
 

@@ -1,0 +1,2849 @@
+openapi: "3.0.3"
+info:
+  title: FabAID Manager API
+  description: NSF grant/project tracking — effort, budgets, subawards, invoices, and statements of work.
+  version: "1.0.0"
+  license:
+    name: Apache-2.0
+servers:
+  - url: /api/v1
+    description: API v1
+
+tags:
+  - name: auth
+    description: Authentication & session management
+  - name: grants
+    description: Grant CRUD
+  - name: wbs
+    description: Work Breakdown Structure areas
+  - name: personnel
+    description: Personnel on a grant
+  - name: subawards
+    description: Subawards under a grant
+  - name: invoices
+    description: Invoices for a subaward
+  - name: sow
+    description: Statements of Work
+  - name: documents
+    description: Uploaded documents / files
+  - name: institution-rates
+    description: Overhead rates, fringe rates, and budgets scoped to grant or subaward
+  - name: budget-line-items
+    description: Line items within an institution budget
+  - name: budget-documents
+    description: Encrypted budget document uploads
+  - name: backups
+    description: Backup & restore
+  - name: admin
+    description: User & API-key management (admin only)
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: Session cookie or API key (Bearer fabaid_…)
+    cookieAuth:
+      type: apiKey
+      in: cookie
+      name: session
+
+  schemas:
+    Error:
+      type: object
+      properties:
+        error:
+          type: string
+      required: [error]
+
+    Grant:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          readOnly: true
+        award_number:
+          type: string
+        title:
+          type: string
+        pi_name:
+          type: string
+        institution:
+          type: string
+        agency:
+          type: string
+        start_date:
+          type: string
+          format: date
+        end_date:
+          type: string
+          format: date
+        total_budget:
+          type: number
+          format: double
+        salary_escalation_rate:
+          type: number
+          format: double
+        status:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+        updated_at:
+          type: string
+          format: date-time
+          readOnly: true
+
+    WBSArea:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          readOnly: true
+        grant_id:
+          type: string
+          format: uuid
+        parent_id:
+          type: string
+          format: uuid
+          nullable: true
+        code:
+          type: string
+        name:
+          type: string
+        description:
+          type: string
+        budget:
+          type: number
+          format: double
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+        updated_at:
+          type: string
+          format: date-time
+          readOnly: true
+
+    WBSEffortSummary:
+      type: object
+      properties:
+        wbs_area_id:
+          type: string
+          format: uuid
+        wbs_code:
+          type: string
+        wbs_name:
+          type: string
+        fiscal_year:
+          type: integer
+        effort_months:
+          type: number
+          format: double
+        amount:
+          type: number
+          format: double
+
+    Personnel:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          readOnly: true
+        grant_id:
+          type: string
+          format: uuid
+        wbs_area_id:
+          type: string
+          format: uuid
+          nullable: true
+        name:
+          type: string
+        role:
+          type: string
+          enum:
+            - pi
+            - co_pi
+            - subaward_pi
+            - senior_personnel
+            - postdoc
+            - other_professional
+            - graduate_student
+            - undergraduate_student
+            - clerical
+            - other
+        title:
+          type: string
+          description: Descriptive job title
+        institution:
+          type: string
+        annual_salary:
+          type: number
+          format: double
+        funded_months:
+          type: number
+          format: double
+        start_date:
+          type: string
+          format: date
+          nullable: true
+        end_date:
+          type: string
+          format: date
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+        updated_at:
+          type: string
+          format: date-time
+          readOnly: true
+
+    PersonnelBudgetEntry:
+      type: object
+      properties:
+        institution:
+          type: string
+        fiscal_year:
+          type: integer
+        effort_months:
+          type: number
+          format: double
+        amount:
+          type: number
+          format: double
+
+    PersonnelDefaultWBS:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          readOnly: true
+        personnel_id:
+          type: string
+          format: uuid
+        wbs_area_id:
+          type: string
+          format: uuid
+        percent:
+          type: number
+          format: double
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+        updated_at:
+          type: string
+          format: date-time
+          readOnly: true
+
+    Subaward:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          readOnly: true
+        grant_id:
+          type: string
+          format: uuid
+        institution:
+          type: string
+        pi_name:
+          type: string
+        total_amount:
+          type: number
+          format: double
+        salary_escalation_rate:
+          type: number
+          format: double
+        start_date:
+          type: string
+          format: date
+        end_date:
+          type: string
+          format: date
+        status:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+        updated_at:
+          type: string
+          format: date-time
+          readOnly: true
+
+    Invoice:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          readOnly: true
+        subaward_id:
+          type: string
+          format: uuid
+        invoice_number:
+          type: string
+        invoice_date:
+          type: string
+          format: date
+        amount:
+          type: number
+          format: double
+        period_start:
+          type: string
+          format: date
+          nullable: true
+        period_end:
+          type: string
+          format: date
+          nullable: true
+        status:
+          type: string
+        notes:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+        updated_at:
+          type: string
+          format: date-time
+          readOnly: true
+
+    StatementOfWork:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          readOnly: true
+        subaward_id:
+          type: string
+          format: uuid
+        fiscal_year:
+          type: integer
+        period_start:
+          type: string
+          format: date
+        period_end:
+          type: string
+          format: date
+        budget_amount:
+          type: number
+          format: double
+        scope_text:
+          type: string
+        status:
+          type: string
+        signed_doc_id:
+          type: string
+          format: uuid
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+        updated_at:
+          type: string
+          format: date-time
+          readOnly: true
+
+    Document:
+      type: object
+      properties:
+
+    SOWConfig:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          readOnly: true
+        grant_id:
+          type: string
+          format: uuid
+        header_title:
+          type: string
+        header_subtitle:
+          type: string
+        project_name:
+          type: string
+        intro_template:
+          type: string
+        costs_template:
+          type: string
+        concurrence_signers:
+          type: string
+          description: JSON array of signer objects with name, title, affiliation
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+        updated_at:
+          type: string
+          format: date-time
+          readOnly: true
+
+    SOWPersonnelDescription:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          readOnly: true
+        sow_id:
+          type: string
+          format: uuid
+        personnel_id:
+          type: string
+          format: uuid
+        description_md:
+          type: string
+        sort_order:
+          type: integer
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+        updated_at:
+          type: string
+          format: date-time
+          readOnly: true
+
+    SOWLineItemDescription:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          readOnly: true
+        sow_id:
+          type: string
+          format: uuid
+        line_item_id:
+          type: string
+          format: uuid
+        description_md:
+          type: string
+        sort_order:
+          type: integer
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+        updated_at:
+          type: string
+          format: date-time
+          readOnly: true
+        id:
+          type: string
+          format: uuid
+          readOnly: true
+        entity_type:
+          type: string
+        entity_id:
+          type: string
+          format: uuid
+        filename:
+          type: string
+        content_type:
+          type: string
+        s3_key:
+          type: string
+        file_size:
+          type: integer
+          format: int64
+        uploaded_by:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+
+    OverheadRate:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          readOnly: true
+        entity_type:
+          type: string
+        entity_id:
+          type: string
+          format: uuid
+        rate_name:
+          type: string
+        rate:
+          type: number
+          format: double
+        description:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+        updated_at:
+          type: string
+          format: date-time
+          readOnly: true
+
+    InstitutionFringeRate:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          readOnly: true
+        entity_type:
+          type: string
+        entity_id:
+          type: string
+          format: uuid
+        fiscal_year:
+          type: integer
+        rate_name:
+          type: string
+        rate:
+          type: number
+          format: double
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+        updated_at:
+          type: string
+          format: date-time
+          readOnly: true
+
+    InstitutionBudget:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          readOnly: true
+        entity_type:
+          type: string
+        entity_id:
+          type: string
+          format: uuid
+        fiscal_year:
+          type: integer
+        version:
+          type: integer
+          readOnly: true
+        is_latest:
+          type: boolean
+          readOnly: true
+        status:
+          type: string
+          enum: [draft, final]
+        budget:
+          type: number
+          format: double
+        notes:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+
+    BudgetLineItem:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          readOnly: true
+        institution_budget_id:
+          type: string
+          format: uuid
+        line_type:
+          type: string
+          enum:
+            - personnel
+            - fringe
+            - travel
+            - equipment
+            - supplies
+            - contractual
+            - participant_support
+            - tuition
+            - other
+        description:
+          type: string
+        personnel_id:
+          type: string
+          format: uuid
+          nullable: true
+        effort_months:
+          type: number
+          format: double
+        amount:
+          type: number
+          format: double
+        overhead_rate_id:
+          type: string
+          format: uuid
+          nullable: true
+        notes:
+          type: string
+        sort_order:
+          type: integer
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+        updated_at:
+          type: string
+          format: date-time
+          readOnly: true
+
+    BudgetLineItemWBS:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          readOnly: true
+        line_item_id:
+          type: string
+          format: uuid
+        wbs_area_id:
+          type: string
+          format: uuid
+        allocation_percent:
+          type: number
+          format: double
+
+    BudgetDocument:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          readOnly: true
+        entity_type:
+          type: string
+        entity_id:
+          type: string
+          format: uuid
+        budget_id:
+          type: string
+          format: uuid
+          nullable: true
+        doc_type:
+          type: string
+        filename:
+          type: string
+        content_type:
+          type: string
+        s3_key:
+          type: string
+        file_size:
+          type: integer
+          format: int64
+        uploaded_by:
+          type: string
+          nullable: true
+        uploaded_by_name:
+          type: string
+        notes:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+        deleted_at:
+          type: string
+          format: date-time
+          nullable: true
+        deleted_by:
+          type: string
+          nullable: true
+
+    SessionInfo:
+      type: object
+      properties:
+        user:
+          $ref: "#/components/schemas/User"
+        role:
+          type: string
+        roles:
+          type: array
+          items:
+            type: string
+        is_dev_login:
+          type: boolean
+
+    User:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          readOnly: true
+        display_name:
+          type: string
+        status:
+          type: string
+        last_login:
+          type: string
+          format: date-time
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+        updated_at:
+          type: string
+          format: date-time
+          readOnly: true
+
+    APIKey:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          readOnly: true
+        name:
+          type: string
+        key_prefix:
+          type: string
+          readOnly: true
+        roles:
+          type: array
+          items:
+            type: string
+        created_by:
+          type: string
+        created_by_name:
+          type: string
+          readOnly: true
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+        last_used_at:
+          type: string
+          format: date-time
+          nullable: true
+          readOnly: true
+        idle_timeout_s:
+          type: integer
+          nullable: true
+        expires_at:
+          type: string
+          format: date-time
+          nullable: true
+        revoked_at:
+          type: string
+          format: date-time
+          nullable: true
+          readOnly: true
+
+    APIKeyCreateResponse:
+      allOf:
+        - $ref: "#/components/schemas/APIKey"
+        - type: object
+          properties:
+            raw_key:
+              type: string
+              description: Shown exactly once at creation time.
+
+    Backup:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          readOnly: true
+        filename:
+          type: string
+        s3_key:
+          type: string
+        s3_bucket:
+          type: string
+        size_bytes:
+          type: integer
+          format: int64
+        status:
+          type: string
+          enum: [running, completed, failed]
+        status_detail:
+          type: string
+        error_msg:
+          type: string
+        initiated_by:
+          type: string
+          enum: [scheduler, manual]
+        encrypted:
+          type: boolean
+        checksum:
+          type: string
+        started_at:
+          type: string
+          format: date-time
+        completed_at:
+          type: string
+          format: date-time
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+
+    BackupSettings:
+      type: object
+      properties:
+        backup_frequency_hours:
+          type: integer
+        backup_bucket:
+          type: string
+        backup_endpoint:
+          type: string
+        backup_access_key:
+          type: string
+        backup_secret_key:
+          type: string
+        backup_use_ssl:
+          type: boolean
+
+    Invite:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          readOnly: true
+        token:
+          type: string
+        user_id:
+          type: string
+          format: uuid
+        role:
+          type: string
+        used:
+          type: boolean
+        expires_at:
+          type: string
+          format: date-time
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+
+  parameters:
+    grantID:
+      name: grantID
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    subawardID:
+      name: subawardID
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    personnelID:
+      name: personnelID
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    entityType:
+      name: entityType
+      in: path
+      required: true
+      schema:
+        type: string
+        enum: [grant, subaward]
+    entityID:
+      name: entityID
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    budgetID:
+      name: budgetID
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    lineItemID:
+      name: lineItemID
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+
+security:
+  - bearerAuth: []
+  - cookieAuth: []
+
+paths:
+  # ── Grants ──────────────────────────────────────────────
+  /grants:
+    get:
+      tags: [grants]
+      summary: List all grants
+      operationId: listGrants
+      responses:
+        "200":
+          description: Array of grants
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Grant"
+    post:
+      tags: [grants]
+      summary: Create a grant
+      operationId: createGrant
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Grant"
+      responses:
+        "201":
+          description: Created grant
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Grant"
+
+  /grants/{grantID}:
+    parameters:
+      - $ref: "#/components/parameters/grantID"
+    get:
+      tags: [grants]
+      summary: Get a grant by ID
+      operationId: getGrant
+      responses:
+        "200":
+          description: Grant object
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Grant"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    put:
+      tags: [grants]
+      summary: Update a grant
+      operationId: updateGrant
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Grant"
+      responses:
+        "200":
+          description: Updated grant
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Grant"
+    delete:
+      tags: [grants]
+      summary: Delete a grant
+      operationId: deleteGrant
+      responses:
+        "204":
+          description: Deleted
+
+  # ── WBS Areas ───────────────────────────────────────────
+  /grants/{grantID}/wbs:
+    parameters:
+      - $ref: "#/components/parameters/grantID"
+    get:
+      tags: [wbs]
+      summary: List WBS areas for a grant
+      operationId: listWBSAreas
+      responses:
+        "200":
+          description: Array of WBS areas
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/WBSArea"
+    post:
+      tags: [wbs]
+      summary: Create a WBS area
+      operationId: createWBSArea
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/WBSArea"
+      responses:
+        "201":
+          description: Created WBS area
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WBSArea"
+
+  /grants/{grantID}/wbs/effort-summary:
+    parameters:
+      - $ref: "#/components/parameters/grantID"
+    get:
+      tags: [wbs]
+      summary: Get WBS effort summary across fiscal years
+      operationId: wbsEffortSummary
+      responses:
+        "200":
+          description: Array of effort summaries
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/WBSEffortSummary"
+
+  /grants/{grantID}/wbs/{wbsID}:
+    parameters:
+      - $ref: "#/components/parameters/grantID"
+      - name: wbsID
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      tags: [wbs]
+      summary: Get a WBS area
+      operationId: getWBSArea
+      responses:
+        "200":
+          description: WBS area
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WBSArea"
+    put:
+      tags: [wbs]
+      summary: Update a WBS area
+      operationId: updateWBSArea
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/WBSArea"
+      responses:
+        "200":
+          description: Updated WBS area
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WBSArea"
+    delete:
+      tags: [wbs]
+      summary: Delete a WBS area
+      operationId: deleteWBSArea
+      responses:
+        "204":
+          description: Deleted
+
+  # ── Personnel ───────────────────────────────────────────
+  /grants/{grantID}/personnel:
+    parameters:
+      - $ref: "#/components/parameters/grantID"
+    get:
+      tags: [personnel]
+      summary: List personnel for a grant
+      operationId: listPersonnel
+      responses:
+        "200":
+          description: Array of personnel
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Personnel"
+    post:
+      tags: [personnel]
+      summary: Create a personnel record
+      operationId: createPersonnel
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Personnel"
+      responses:
+        "201":
+          description: Created personnel
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Personnel"
+
+  /grants/{grantID}/personnel/titles:
+    parameters:
+      - $ref: "#/components/parameters/grantID"
+    get:
+      tags: [personnel]
+      summary: List distinct personnel titles
+      operationId: listPersonnelTitles
+      responses:
+        "200":
+          description: Array of title strings
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: string
+
+  /grants/{grantID}/personnel/{personnelID}:
+    parameters:
+      - $ref: "#/components/parameters/grantID"
+      - $ref: "#/components/parameters/personnelID"
+    put:
+      tags: [personnel]
+      summary: Update a personnel record
+      operationId: updatePersonnel
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Personnel"
+      responses:
+        "200":
+          description: Updated personnel
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Personnel"
+    delete:
+      tags: [personnel]
+      summary: Delete a personnel record
+      operationId: deletePersonnel
+      responses:
+        "204":
+          description: Deleted
+
+  /grants/{grantID}/personnel/{personnelID}/budget-summary:
+    parameters:
+      - $ref: "#/components/parameters/grantID"
+      - $ref: "#/components/parameters/personnelID"
+    get:
+      tags: [personnel]
+      summary: Budget summary for a person across years
+      operationId: personnelBudgetSummary
+      responses:
+        "200":
+          description: Array of budget entries
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/PersonnelBudgetEntry"
+
+  /grants/{grantID}/personnel/{personnelID}/default-wbs:
+    parameters:
+      - $ref: "#/components/parameters/grantID"
+      - $ref: "#/components/parameters/personnelID"
+    get:
+      tags: [personnel]
+      summary: List default WBS allocations for a person
+      operationId: listPersonnelDefaultWBS
+      responses:
+        "200":
+          description: Array of WBS allocations
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/PersonnelDefaultWBS"
+    put:
+      tags: [personnel]
+      summary: Set default WBS allocations for a person
+      operationId: setPersonnelDefaultWBS
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: array
+              items:
+                $ref: "#/components/schemas/PersonnelDefaultWBS"
+      responses:
+        "200":
+          description: Saved allocations
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/PersonnelDefaultWBS"
+  # ── Subawards ───────────────────────────────────────────
+  /grants/{grantID}/subawards:
+    parameters:
+      - $ref: "#/components/parameters/grantID"
+    get:
+      tags: [subawards]
+      summary: List subawards for a grant
+      operationId: listSubawards
+      responses:
+        "200":
+          description: Array of subawards
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Subaward"
+    post:
+      tags: [subawards]
+      summary: Create a subaward
+      operationId: createSubaward
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Subaward"
+      responses:
+        "201":
+          description: Created subaward
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Subaward"
+
+  /grants/{grantID}/subawards/{subawardID}:
+    parameters:
+      - $ref: "#/components/parameters/grantID"
+      - $ref: "#/components/parameters/subawardID"
+    put:
+      tags: [subawards]
+      summary: Update a subaward
+      operationId: updateSubaward
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Subaward"
+      responses:
+        "200":
+          description: Updated subaward
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Subaward"
+    delete:
+      tags: [subawards]
+      summary: Delete a subaward
+      operationId: deleteSubaward
+      responses:
+        "204":
+          description: Deleted
+
+  # ── Invoices ────────────────────────────────────────────
+  /grants/{grantID}/subawards/{subawardID}/invoices:
+    parameters:
+      - $ref: "#/components/parameters/grantID"
+      - $ref: "#/components/parameters/subawardID"
+    get:
+      tags: [invoices]
+      summary: List invoices for a subaward
+      operationId: listInvoices
+      responses:
+        "200":
+          description: Array of invoices
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Invoice"
+    post:
+      tags: [invoices]
+      summary: Create an invoice
+      operationId: createInvoice
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Invoice"
+      responses:
+        "201":
+          description: Created invoice
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Invoice"
+
+  /grants/{grantID}/subawards/{subawardID}/invoices/{invoiceID}/status:
+    parameters:
+      - $ref: "#/components/parameters/grantID"
+      - $ref: "#/components/parameters/subawardID"
+      - name: invoiceID
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    patch:
+      tags: [invoices]
+      summary: Update invoice status
+      operationId: updateInvoiceStatus
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                status:
+                  type: string
+              required: [status]
+      responses:
+        "200":
+          description: Updated status
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+
+  /grants/{grantID}/subawards/{subawardID}/invoices/{invoiceID}/upload:
+    parameters:
+      - $ref: "#/components/parameters/grantID"
+      - $ref: "#/components/parameters/subawardID"
+      - name: invoiceID
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    post:
+      tags: [invoices]
+      summary: Upload an invoice PDF
+      operationId: uploadInvoiceDocument
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file:
+                  type: string
+                  format: binary
+      responses:
+        "201":
+          description: Created document
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Document"
+
+  # ── Statements of Work ─────────────────────────────────
+  /grants/{grantID}/subawards/{subawardID}/sow:
+    parameters:
+      - $ref: "#/components/parameters/grantID"
+      - $ref: "#/components/parameters/subawardID"
+    get:
+      tags: [sow]
+      summary: List statements of work
+      operationId: listStatementsOfWork
+      responses:
+        "200":
+          description: Array of SOWs
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/StatementOfWork"
+    post:
+      tags: [sow]
+      summary: Create a statement of work
+      operationId: createStatementOfWork
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/StatementOfWork"
+      responses:
+        "201":
+          description: Created SOW
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StatementOfWork"
+
+  /grants/{grantID}/subawards/{subawardID}/sow/{sowID}:
+    parameters:
+      - $ref: "#/components/parameters/grantID"
+      - $ref: "#/components/parameters/subawardID"
+      - name: sowID
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    put:
+      tags: [sow]
+      summary: Update a statement of work
+      operationId: updateStatementOfWork
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/StatementOfWork"
+      responses:
+        "200":
+          description: Updated SOW
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StatementOfWork"
+
+  /grants/{grantID}/subawards/{subawardID}/sow/{sowID}/upload-signed:
+    parameters:
+      - $ref: "#/components/parameters/grantID"
+      - $ref: "#/components/parameters/subawardID"
+      - name: sowID
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    post:
+      tags: [sow]
+      summary: Upload a signed SOW document
+      operationId: uploadSignedSOW
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file:
+                  type: string
+                  format: binary
+      responses:
+        "200":
+          description: Updated SOW with signed_doc_id
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StatementOfWork"
+
+  # ── SOW Config ──────────────────────────────────────────
+  /grants/{grantID}/sow-config:
+    parameters:
+      - $ref: "#/components/parameters/grantID"
+    get:
+      tags: [sow]
+      summary: Get SOW document template configuration
+      operationId: getSOWConfig
+      responses:
+        "200":
+          description: SOW config for this grant
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SOWConfig"
+    put:
+      tags: [sow]
+      summary: Create or update SOW config
+      operationId: upsertSOWConfig
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SOWConfig"
+      responses:
+        "200":
+          description: Saved SOW config
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SOWConfig"
+
+  # ── SOW Render ──────────────────────────────────────────
+  /grants/{grantID}/subawards/{subawardID}/sow/{sowID}/render:
+    parameters:
+      - $ref: "#/components/parameters/grantID"
+      - $ref: "#/components/parameters/subawardID"
+      - name: sowID
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      tags: [sow]
+      summary: Render SOW as HTML document
+      operationId: renderSOW
+      responses:
+        "200":
+          description: HTML SOW document
+          content:
+            text/html:
+              schema:
+                type: string
+
+  # ── SOW Personnel Descriptions ──────────────────────────
+  /grants/{grantID}/subawards/{subawardID}/sow/{sowID}/personnel-descriptions:
+    parameters:
+      - $ref: "#/components/parameters/grantID"
+      - $ref: "#/components/parameters/subawardID"
+      - name: sowID
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      tags: [sow]
+      summary: List personnel descriptions for a SOW
+      operationId: listSOWPersonnelDescriptions
+      responses:
+        "200":
+          description: Array of personnel descriptions
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/SOWPersonnelDescription"
+    put:
+      tags: [sow]
+      summary: Create or update a personnel description
+      operationId: upsertSOWPersonnelDescription
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SOWPersonnelDescription"
+      responses:
+        "200":
+          description: Saved personnel description
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SOWPersonnelDescription"
+
+  /grants/{grantID}/subawards/{subawardID}/sow/{sowID}/personnel-descriptions/{descID}:
+    parameters:
+      - $ref: "#/components/parameters/grantID"
+      - $ref: "#/components/parameters/subawardID"
+      - name: sowID
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: descID
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    delete:
+      tags: [sow]
+      summary: Delete a personnel description
+      operationId: deleteSOWPersonnelDescription
+      responses:
+        "204":
+          description: Deleted
+
+  # ── SOW Line Item Descriptions ──────────────────────────
+  /grants/{grantID}/subawards/{subawardID}/sow/{sowID}/line-item-descriptions:
+    parameters:
+      - $ref: "#/components/parameters/grantID"
+      - $ref: "#/components/parameters/subawardID"
+      - name: sowID
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      tags: [sow]
+      summary: List line item descriptions for a SOW
+      operationId: listSOWLineItemDescriptions
+      responses:
+        "200":
+          description: Array of line item descriptions
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/SOWLineItemDescription"
+    put:
+      tags: [sow]
+      summary: Create or update a line item description
+      operationId: upsertSOWLineItemDescription
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SOWLineItemDescription"
+      responses:
+        "200":
+          description: Saved line item description
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SOWLineItemDescription"
+
+  /grants/{grantID}/subawards/{subawardID}/sow/{sowID}/line-item-descriptions/{descID}:
+    parameters:
+      - $ref: "#/components/parameters/grantID"
+      - $ref: "#/components/parameters/subawardID"
+      - name: sowID
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: descID
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    delete:
+      tags: [sow]
+      summary: Delete a line item description
+      operationId: deleteSOWLineItemDescription
+      responses:
+        "204":
+          description: Deleted
+
+  # ── Documents ───────────────────────────────────────────
+  /documents/{docID}:
+    parameters:
+      - name: docID
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      tags: [documents]
+      summary: Get document metadata
+      operationId: getDocument
+      responses:
+        "200":
+          description: Document metadata
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Document"
+
+  /documents/{docID}/download:
+    parameters:
+      - name: docID
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      tags: [documents]
+      summary: Download a document file
+      operationId: downloadDocument
+      responses:
+        "200":
+          description: File binary
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+  # ── Overhead Rates ──────────────────────────────────────
+  /institution-rates/{entityType}/{entityID}/overhead-rates:
+    parameters:
+      - $ref: "#/components/parameters/entityType"
+      - $ref: "#/components/parameters/entityID"
+    get:
+      tags: [institution-rates]
+      summary: List overhead (F&A) rates
+      operationId: listOverheadRates
+      responses:
+        "200":
+          description: Array of overhead rates
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/OverheadRate"
+    post:
+      tags: [institution-rates]
+      summary: Create an overhead rate
+      operationId: createOverheadRate
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/OverheadRate"
+      responses:
+        "201":
+          description: Created overhead rate
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OverheadRate"
+
+  /institution-rates/{entityType}/{entityID}/overhead-rates/{overheadRateID}:
+    parameters:
+      - $ref: "#/components/parameters/entityType"
+      - $ref: "#/components/parameters/entityID"
+      - name: overheadRateID
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    put:
+      tags: [institution-rates]
+      summary: Update an overhead rate
+      operationId: updateOverheadRate
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/OverheadRate"
+      responses:
+        "200":
+          description: Updated overhead rate
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OverheadRate"
+    delete:
+      tags: [institution-rates]
+      summary: Delete an overhead rate
+      operationId: deleteOverheadRate
+      responses:
+        "204":
+          description: Deleted
+
+  # ── Fringe Rates ────────────────────────────────────────
+  /institution-rates/{entityType}/{entityID}/fringe-rates:
+    parameters:
+      - $ref: "#/components/parameters/entityType"
+      - $ref: "#/components/parameters/entityID"
+    get:
+      tags: [institution-rates]
+      summary: List fringe rates
+      operationId: listFringeRates
+      responses:
+        "200":
+          description: Array of fringe rates
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/InstitutionFringeRate"
+    put:
+      tags: [institution-rates]
+      summary: Upsert a fringe rate (insert or update by fiscal_year + rate_name)
+      operationId: upsertFringeRate
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/InstitutionFringeRate"
+      responses:
+        "200":
+          description: Upserted fringe rate
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/InstitutionFringeRate"
+
+  /institution-rates/{entityType}/{entityID}/fringe-rates/{fringeRateID}:
+    parameters:
+      - $ref: "#/components/parameters/entityType"
+      - $ref: "#/components/parameters/entityID"
+      - name: fringeRateID
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    delete:
+      tags: [institution-rates]
+      summary: Delete a fringe rate
+      operationId: deleteFringeRate
+      responses:
+        "204":
+          description: Deleted
+
+  # ── Institution Budgets ─────────────────────────────────
+  /institution-rates/{entityType}/{entityID}/budgets:
+    parameters:
+      - $ref: "#/components/parameters/entityType"
+      - $ref: "#/components/parameters/entityID"
+    get:
+      tags: [institution-rates]
+      summary: List budgets (latest versions)
+      operationId: listInstitutionBudgets
+      responses:
+        "200":
+          description: Array of budgets
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/InstitutionBudget"
+    post:
+      tags: [institution-rates]
+      summary: Create a budget for a fiscal year
+      operationId: createInstitutionBudget
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/InstitutionBudget"
+      responses:
+        "201":
+          description: Created budget
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/InstitutionBudget"
+
+  /institution-rates/{entityType}/{entityID}/budgets/{budgetID}:
+    parameters:
+      - $ref: "#/components/parameters/entityType"
+      - $ref: "#/components/parameters/entityID"
+      - $ref: "#/components/parameters/budgetID"
+    delete:
+      tags: [institution-rates]
+      summary: Delete a budget
+      operationId: deleteInstitutionBudget
+      responses:
+        "204":
+          description: Deleted
+
+  /institution-rates/{entityType}/{entityID}/budgets/{budgetID}/finalize:
+    parameters:
+      - $ref: "#/components/parameters/entityType"
+      - $ref: "#/components/parameters/entityID"
+      - $ref: "#/components/parameters/budgetID"
+    post:
+      tags: [institution-rates]
+      summary: Finalize a draft budget (set status to final)
+      operationId: finalizeBudget
+      responses:
+        "200":
+          description: Finalized budget
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/InstitutionBudget"
+
+  /institution-rates/{entityType}/{entityID}/budgets/{budgetID}/duplicate:
+    parameters:
+      - $ref: "#/components/parameters/entityType"
+      - $ref: "#/components/parameters/entityID"
+      - $ref: "#/components/parameters/budgetID"
+    post:
+      tags: [institution-rates]
+      summary: Duplicate a budget (creates new draft version)
+      operationId: duplicateBudget
+      responses:
+        "201":
+          description: New draft budget with copied line items
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/InstitutionBudget"
+
+  # ── Budget Line Items ───────────────────────────────────
+  /institution-rates/{entityType}/{entityID}/budgets/{budgetID}/line-items:
+    parameters:
+      - $ref: "#/components/parameters/entityType"
+      - $ref: "#/components/parameters/entityID"
+      - $ref: "#/components/parameters/budgetID"
+    get:
+      tags: [institution-rates]
+      summary: List line items for a budget
+      operationId: listBudgetLineItems
+      responses:
+        "200":
+          description: Array of line items
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/BudgetLineItem"
+    post:
+      tags: [institution-rates]
+      summary: Create a line item
+      operationId: createBudgetLineItem
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BudgetLineItem"
+      responses:
+        "201":
+          description: Created line item
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BudgetLineItem"
+
+  /institution-rates/{entityType}/{entityID}/budgets/{budgetID}/line-items/{lineItemID}:
+    parameters:
+      - $ref: "#/components/parameters/entityType"
+      - $ref: "#/components/parameters/entityID"
+      - $ref: "#/components/parameters/budgetID"
+      - name: lineItemID
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    put:
+      tags: [institution-rates]
+      summary: Update a line item
+      operationId: updateBudgetLineItem
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BudgetLineItem"
+      responses:
+        "200":
+          description: Updated line item
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BudgetLineItem"
+    delete:
+      tags: [institution-rates]
+      summary: Delete a line item
+      operationId: deleteBudgetLineItem
+      responses:
+        "204":
+          description: Deleted
+
+  # ── Line Item WBS Allocations ───────────────────────────
+  /institution-rates/{entityType}/{entityID}/budgets/{budgetID}/line-items/{lineItemID}/wbs:
+    parameters:
+      - $ref: "#/components/parameters/entityType"
+      - $ref: "#/components/parameters/entityID"
+      - $ref: "#/components/parameters/budgetID"
+      - name: lineItemID
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      tags: [institution-rates]
+      summary: Get WBS allocations for a line item
+      operationId: getLineItemWBS
+      responses:
+        "200":
+          description: Array of WBS allocations
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/BudgetLineItemWBS"
+    put:
+      tags: [institution-rates]
+      summary: Set WBS allocations for a line item (replaces all)
+      operationId: setLineItemWBS
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: array
+              items:
+                $ref: "#/components/schemas/BudgetLineItemWBS"
+      responses:
+        "200":
+          description: Updated allocations
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/BudgetLineItemWBS"
+
+  # ── NSF 1030 Renderer ──────────────────────────────────
+  /institution-rates/{entityType}/{entityID}/nsf1030:
+    parameters:
+      - $ref: "#/components/parameters/entityType"
+      - $ref: "#/components/parameters/entityID"
+    get:
+      tags: [institution-rates]
+      summary: Render NSF 1030 budget form as HTML
+      operationId: renderNSF1030
+      parameters:
+        - name: year
+          in: query
+          required: false
+          description: Fiscal year to render; if omitted, renders cumulative or default
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: HTML rendering of the NSF 1030 form
+          content:
+            text/html:
+              schema:
+                type: string
+
+  # ── Budget Documents ────────────────────────────────────
+  /institution-rates/{entityType}/{entityID}/budgets/{budgetID}/documents:
+    parameters:
+      - $ref: "#/components/parameters/entityType"
+      - $ref: "#/components/parameters/entityID"
+      - $ref: "#/components/parameters/budgetID"
+    get:
+      tags: [institution-rates]
+      summary: List documents attached to a budget
+      operationId: listBudgetDocuments
+      responses:
+        "200":
+          description: Array of budget documents
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/BudgetDocument"
+    post:
+      tags: [institution-rates]
+      summary: Upload a document and attach it to a budget
+      operationId: uploadBudgetDocument
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file, doc_type]
+              properties:
+                file:
+                  type: string
+                  format: binary
+                doc_type:
+                  type: string
+                  description: "Document type (e.g. justification, quote)"
+                description:
+                  type: string
+      responses:
+        "201":
+          description: Uploaded budget document metadata
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BudgetDocument"
+
+  /institution-rates/{entityType}/{entityID}/budgets/{budgetID}/documents/{docID}:
+    parameters:
+      - $ref: "#/components/parameters/entityType"
+      - $ref: "#/components/parameters/entityID"
+      - $ref: "#/components/parameters/budgetID"
+      - name: docID
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      tags: [institution-rates]
+      summary: Get budget document metadata
+      operationId: getBudgetDocument
+      responses:
+        "200":
+          description: Document metadata
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BudgetDocument"
+    delete:
+      tags: [institution-rates]
+      summary: Soft-delete a budget document
+      operationId: deleteBudgetDocument
+      responses:
+        "204":
+          description: Deleted
+
+  /institution-rates/{entityType}/{entityID}/budgets/{budgetID}/documents/{docID}/download:
+    parameters:
+      - $ref: "#/components/parameters/entityType"
+      - $ref: "#/components/parameters/entityID"
+      - $ref: "#/components/parameters/budgetID"
+      - name: docID
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      tags: [institution-rates]
+      summary: Download a budget document file
+      operationId: downloadBudgetDocument
+      responses:
+        "200":
+          description: File content
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+
+  # ── Authentication ──────────────────────────────────────
+  /auth/mode:
+    get:
+      tags: [auth]
+      summary: Get current authentication mode
+      operationId: getAuthMode
+      security: []
+      responses:
+        "200":
+          description: Authentication mode info
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  mode:
+                    type: string
+                    enum: [dev, oidc]
+                  oidc_configured:
+                    type: boolean
+                  allow_dev_login:
+                    type: boolean
+
+  /auth/me:
+    get:
+      tags: [auth]
+      summary: Get current session info
+      operationId: getCurrentSession
+      security: []
+      responses:
+        "200":
+          description: Session info
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SessionInfo"
+        "401":
+          description: Not authenticated
+
+  /auth/logout:
+    post:
+      tags: [auth]
+      summary: Destroy the current session
+      operationId: logout
+      security: []
+      responses:
+        "200":
+          description: Logged out
+
+  /auth/dev-login:
+    post:
+      tags: [auth]
+      summary: Log in as a dev user (dev mode only)
+      operationId: devLogin
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                display_name:
+                  type: string
+                email:
+                  type: string
+      responses:
+        "200":
+          description: Logged in
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SessionInfo"
+
+  /auth/oidc/login:
+    get:
+      tags: [auth]
+      summary: Start OIDC login flow (redirects to IdP)
+      operationId: oidcLogin
+      security: []
+      responses:
+        "302":
+          description: Redirect to OIDC provider
+
+  /auth/oidc/callback:
+    get:
+      tags: [auth]
+      summary: OIDC callback (handles code exchange)
+      operationId: oidcCallback
+      security: []
+      parameters:
+        - name: code
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: state
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        "302":
+          description: Redirect to app after successful login
+
+  /auth/profile:
+    put:
+      tags: [auth]
+      summary: Update own display name
+      operationId: updateMyProfile
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                display_name:
+                  type: string
+      responses:
+        "200":
+          description: Updated profile
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/User"
+
+  # ── Admin — User Management ────────────────────────────
+  /admin/users:
+    get:
+      tags: [admin]
+      summary: List all users
+      operationId: listUsers
+      responses:
+        "200":
+          description: Array of users
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/User"
+    post:
+      tags: [admin]
+      summary: Create a user account
+      operationId: createUserAccount
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                display_name:
+                  type: string
+                email:
+                  type: string
+      responses:
+        "201":
+          description: Created user
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/User"
+
+  /admin/users/{userID}:
+    parameters:
+      - name: userID
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    put:
+      tags: [admin]
+      summary: Update a user account
+      operationId: updateUserAccount
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                display_name:
+                  type: string
+                email:
+                  type: string
+      responses:
+        "200":
+          description: Updated user
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/User"
+    delete:
+      tags: [admin]
+      summary: Delete a user account
+      operationId: deleteUserAccount
+      responses:
+        "204":
+          description: Deleted
+
+  /admin/users/{userID}/roles:
+    parameters:
+      - name: userID
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    post:
+      tags: [admin]
+      summary: Add a role to a user
+      operationId: addUserRole
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [role]
+              properties:
+                role:
+                  type: string
+                  enum: [admin, grant_admin, read_only]
+      responses:
+        "200":
+          description: Role added
+
+  /admin/users/{userID}/roles/{role}:
+    parameters:
+      - name: userID
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: role
+        in: path
+        required: true
+        schema:
+          type: string
+    delete:
+      tags: [admin]
+      summary: Remove a role from a user
+      operationId: removeUserRole
+      responses:
+        "200":
+          description: Role removed
+
+  /admin/users/{userID}/identities/{identityID}:
+    parameters:
+      - name: userID
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: identityID
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    delete:
+      tags: [admin]
+      summary: Remove an identity from a user
+      operationId: removeUserIdentity
+      responses:
+        "200":
+          description: Identity removed
+
+  /admin/users/{userID}/invites:
+    parameters:
+      - name: userID
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    post:
+      tags: [admin]
+      summary: Create an invite for a user
+      operationId: createInvite
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                email:
+                  type: string
+      responses:
+        "201":
+          description: Created invite
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Invite"
+    get:
+      tags: [admin]
+      summary: List invites for a user
+      operationId: listInvites
+      responses:
+        "200":
+          description: Array of invites
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Invite"
+
+  /admin/users/{userID}/invites/{inviteID}:
+    parameters:
+      - name: userID
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: inviteID
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    delete:
+      tags: [admin]
+      summary: Delete an invite
+      operationId: deleteInvite
+      responses:
+        "204":
+          description: Deleted
+
+  # ── Admin — OIDC Config ────────────────────────────────
+  /admin/oidc-config:
+    get:
+      tags: [admin]
+      summary: Get OIDC configuration
+      operationId: getOIDCConfig
+      responses:
+        "200":
+          description: OIDC configuration
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  issuer:
+                    type: string
+                  client_id:
+                    type: string
+                  client_secret:
+                    type: string
+                  redirect_url:
+                    type: string
+    put:
+      tags: [admin]
+      summary: Update OIDC configuration
+      operationId: updateOIDCConfig
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                issuer:
+                  type: string
+                client_id:
+                  type: string
+                client_secret:
+                  type: string
+                redirect_url:
+                  type: string
+      responses:
+        "200":
+          description: Updated OIDC configuration
+
+  # ── Admin — API Keys ───────────────────────────────────
+  /admin/api-keys:
+    get:
+      tags: [admin]
+      summary: List API keys
+      operationId: listAPIKeys
+      responses:
+        "200":
+          description: Array of API keys
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/APIKey"
+    post:
+      tags: [admin]
+      summary: Create an API key
+      operationId: createAPIKey
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name:
+                  type: string
+                roles:
+                  type: array
+                  items:
+                    type: string
+      responses:
+        "201":
+          description: Created API key (includes plain-text key — shown only once)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/APIKeyCreateResponse"
+
+  /admin/api-keys/{keyID}/revoke:
+    parameters:
+      - name: keyID
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    post:
+      tags: [admin]
+      summary: Revoke an API key
+      operationId: revokeAPIKey
+      responses:
+        "200":
+          description: API key revoked
+
+  /admin/api-keys/{keyID}:
+    parameters:
+      - name: keyID
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    delete:
+      tags: [admin]
+      summary: Delete an API key
+      operationId: deleteAPIKey
+      responses:
+        "204":
+          description: Deleted
+
+  # ── Backups ────────────────────────────────────────────
+  /backup:
+    get:
+      tags: [backups]
+      summary: Legacy backup download (creates + streams tar.gz)
+      operationId: createBackupLegacy
+      responses:
+        "200":
+          description: tar.gz archive
+          content:
+            application/gzip:
+              schema:
+                type: string
+                format: binary
+
+  /backups:
+    get:
+      tags: [backups]
+      summary: List backups
+      operationId: listBackups
+      responses:
+        "200":
+          description: Array of backup records
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Backup"
+
+  /backups/trigger:
+    post:
+      tags: [backups]
+      summary: Trigger a new backup (admin)
+      operationId: triggerBackup
+      responses:
+        "201":
+          description: Backup record
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Backup"
+
+  /backups/upload-restore:
+    post:
+      tags: [backups]
+      summary: Upload and restore from a backup file (admin)
+      operationId: uploadRestore
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file:
+                  type: string
+                  format: binary
+                encryption_key:
+                  type: string
+      responses:
+        "200":
+          description: Restore triggered
+
+  /backups/settings:
+    get:
+      tags: [backups]
+      summary: Get backup settings (admin)
+      operationId: getBackupSettings
+      responses:
+        "200":
+          description: Backup settings
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BackupSettings"
+    put:
+      tags: [backups]
+      summary: Update backup settings (admin)
+      operationId: updateBackupSettings
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BackupSettings"
+      responses:
+        "200":
+          description: Updated settings
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BackupSettings"
+
+  /backups/general-key:
+    get:
+      tags: [backups]
+      summary: Get the general backup encryption key (admin)
+      operationId: getGeneralBackupKey
+      responses:
+        "200":
+          description: Encryption key info
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  key:
+                    type: string
+
+  /backups/derive-key:
+    post:
+      tags: [backups]
+      summary: Derive an encryption key from a passphrase (admin)
+      operationId: deriveKeyFromInput
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [passphrase]
+              properties:
+                passphrase:
+                  type: string
+      responses:
+        "200":
+          description: Derived key
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  key:
+                    type: string
+
+  /backups/{backupID}/download:
+    parameters:
+      - name: backupID
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      tags: [backups]
+      summary: Download a backup archive (admin)
+      operationId: downloadBackup
+      responses:
+        "200":
+          description: Backup archive
+          content:
+            application/gzip:
+              schema:
+                type: string
+                format: binary
+
+  /backups/{backupID}/key:
+    parameters:
+      - name: backupID
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      tags: [backups]
+      summary: Get per-backup encryption key (admin)
+      operationId: getPerBackupKey
+      responses:
+        "200":
+          description: Per-backup key
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  key:
+                    type: string
+
+  /backups/{backupID}/restore:
+    parameters:
+      - name: backupID
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    post:
+      tags: [backups]
+      summary: Restore from an existing backup (admin)
+      operationId: restoreBackup
+      responses:
+        "200":
+          description: Restore triggered
+
+  /backups/{backupID}:
+    parameters:
+      - name: backupID
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    delete:
+      tags: [backups]
+      summary: Delete a backup (admin)
+      operationId: deleteBackup
+      responses:
+        "204":
+          description: Deleted
+
+  # ── Health Check ────────────────────────────────────────
+  # NOTE: /healthz is served at the root, not under /api/v1.
+  /healthz:
+    get:
+      tags: [health]
+      summary: Health check
+      operationId: healthCheck
+      security: []
+      servers:
+        - url: /
+          description: Root (not under /api/v1)
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: ok

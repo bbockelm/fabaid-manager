@@ -204,7 +204,39 @@ func (q *Queries) SetPersonnelDefaultWBS(ctx context.Context, personnelID string
 // WBSEffortSummary returns effort-months and cost per WBS area per fiscal year,
 // drawn from the latest institution budgets' line-item WBS allocations.
 func (q *Queries) WBSEffortSummary(ctx context.Context, grantID string) ([]models.WBSEffortSummary, error) {
-	rows, err := q.pool.Query(ctx, `
+	return q.WBSEffortSummaryFiltered(ctx, grantID, nil)
+}
+
+// WBSEffortSummaryFiltered returns effort summaries optionally filtered by institution names.
+// When institutions is nil or empty, all institutions are included.
+func (q *Queries) WBSEffortSummaryFiltered(ctx context.Context, grantID string, institutions []string) ([]models.WBSEffortSummary, error) {
+	var query string
+	var args []interface{}
+
+	if len(institutions) > 0 {
+		query = `
+		SELECT
+			w.id AS wbs_area_id,
+			w.code AS wbs_code,
+			w.name AS wbs_name,
+			ib.fiscal_year,
+			COALESCE(SUM(bli.effort_months * bliw.allocation_percent / 100.0), 0) AS effort_months,
+			COALESCE(SUM(bli.amount * bliw.allocation_percent / 100.0), 0) AS amount
+		FROM wbs_areas w
+		LEFT JOIN budget_line_item_wbs bliw ON bliw.wbs_area_id = w.id
+		LEFT JOIN budget_line_items bli ON bli.id = bliw.line_item_id
+		LEFT JOIN institution_budgets ib ON ib.id = bli.institution_budget_id AND ib.is_latest = true
+			AND (
+				(ib.entity_type = 'grant' AND ib.entity_id IN (SELECT id FROM grants WHERE id = $1 AND institution = ANY($2)))
+				OR
+				(ib.entity_type = 'subaward' AND ib.entity_id IN (SELECT id FROM subawards WHERE grant_id = $1 AND institution = ANY($2)))
+			)
+		WHERE w.grant_id = $1
+		GROUP BY w.id, w.code, w.name, ib.fiscal_year
+		ORDER BY w.code, ib.fiscal_year`
+		args = []interface{}{grantID, institutions}
+	} else {
+		query = `
 		SELECT
 			w.id AS wbs_area_id,
 			w.code AS wbs_code,
@@ -218,7 +250,11 @@ func (q *Queries) WBSEffortSummary(ctx context.Context, grantID string) ([]model
 		LEFT JOIN institution_budgets ib ON ib.id = bli.institution_budget_id AND ib.is_latest = true
 		WHERE w.grant_id = $1
 		GROUP BY w.id, w.code, w.name, ib.fiscal_year
-		ORDER BY w.code, ib.fiscal_year`, grantID)
+		ORDER BY w.code, ib.fiscal_year`
+		args = []interface{}{grantID}
+	}
+
+	rows, err := q.pool.Query(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("WBS effort summary: %w", err)
 	}
@@ -404,6 +440,25 @@ func (q *Queries) DeletePersonnel(ctx context.Context, id string) error {
 	return err
 }
 
+func (q *Queries) GetPersonnel(ctx context.Context, id string) (*models.Personnel, error) {
+	var p models.Personnel
+	var sd, ed *string
+	err := q.pool.QueryRow(ctx, `
+		SELECT id, grant_id, wbs_area_id, name, role, title, COALESCE(institution, ''),
+		       annual_salary, funded_months,
+		       start_date::text, end_date::text, created_at, updated_at
+		FROM personnel WHERE id=$1`, id).Scan(
+		&p.ID, &p.GrantID, &p.WBSAreaID, &p.Name, &p.Role, &p.Title, &p.Institution,
+		&p.AnnualSalary, &p.FundedMonths,
+		&sd, &ed, &p.CreatedAt, &p.UpdatedAt)
+	if err != nil {
+		return nil, fmt.Errorf("getting personnel: %w", err)
+	}
+	p.StartDate = sd
+	p.EndDate = ed
+	return &p, nil
+}
+
 // ListPersonnelTitles returns distinct non-empty titles used by personnel in a grant.
 func (q *Queries) ListPersonnelTitles(ctx context.Context, grantID string) ([]string, error) {
 	rows, err := q.pool.Query(ctx,
@@ -435,12 +490,19 @@ func (q *Queries) PersonnelBudgetSummary(ctx context.Context, personnelID string
 				END, ''
 			) AS institution,
 			ib.fiscal_year,
-			COALESCE(SUM(bli.effort_months), 0) AS effort_months,
-			COALESCE(SUM(bli.amount), 0) AS amount
+			COALESCE(SUM(bli.effort_months) FILTER (WHERE bli.line_type = 'personnel'), 0) AS effort_months,
+			COALESCE(SUM(bli.amount) FILTER (WHERE bli.line_type = 'personnel'), 0) AS salary_amount,
+			COALESCE(SUM(bli.amount) FILTER (WHERE bli.line_type = 'fringe'), 0) AS fringe_amount,
+			COALESCE(
+				CASE ib.entity_type
+					WHEN 'grant' THEN (SELECT salary_escalation_rate FROM grants WHERE id = ib.entity_id::uuid)
+					WHEN 'subaward' THEN (SELECT salary_escalation_rate FROM subawards WHERE id = ib.entity_id::uuid)
+				END, 0
+			) AS salary_escalation_rate
 		FROM budget_line_items bli
 		JOIN institution_budgets ib ON bli.institution_budget_id = ib.id
 		WHERE bli.personnel_id = $1 AND ib.is_latest = true
-		GROUP BY institution, ib.fiscal_year
+		GROUP BY institution, ib.fiscal_year, salary_escalation_rate
 		ORDER BY institution, ib.fiscal_year`, personnelID)
 	if err != nil {
 		return nil, err
@@ -449,7 +511,7 @@ func (q *Queries) PersonnelBudgetSummary(ctx context.Context, personnelID string
 	var entries []models.PersonnelBudgetEntry
 	for rows.Next() {
 		var e models.PersonnelBudgetEntry
-		if err := rows.Scan(&e.Institution, &e.FiscalYear, &e.EffortMonths, &e.Amount); err != nil {
+		if err := rows.Scan(&e.Institution, &e.FiscalYear, &e.EffortMonths, &e.SalaryAmount, &e.FringeAmount, &e.SalaryEscalationRate); err != nil {
 			return nil, err
 		}
 		entries = append(entries, e)
@@ -536,7 +598,7 @@ func (q *Queries) ListAllDocuments(ctx context.Context) ([]models.Document, erro
 func (q *Queries) ListStatementsOfWork(ctx context.Context, subawardID string) ([]models.StatementOfWork, error) {
 	rows, err := q.pool.Query(ctx, `
 		SELECT id, subaward_id, fiscal_year, period_start::text, period_end::text,
-		       budget_amount, COALESCE(scope_text, ''), status, signed_doc_id, created_at, updated_at
+		       budget_id, COALESCE(scope_text, ''), status, signed_doc_id, created_at, updated_at
 		FROM statements_of_work WHERE subaward_id=$1 ORDER BY fiscal_year`, subawardID)
 	if err != nil {
 		return nil, fmt.Errorf("listing SOWs: %w", err)
@@ -547,7 +609,7 @@ func (q *Queries) ListStatementsOfWork(ctx context.Context, subawardID string) (
 	for rows.Next() {
 		var s models.StatementOfWork
 		if err := rows.Scan(&s.ID, &s.SubawardID, &s.FiscalYear, &s.PeriodStart, &s.PeriodEnd,
-			&s.BudgetAmount, &s.ScopeText, &s.Status, &s.SignedDocID, &s.CreatedAt, &s.UpdatedAt); err != nil {
+			&s.BudgetID, &s.ScopeText, &s.Status, &s.SignedDocID, &s.CreatedAt, &s.UpdatedAt); err != nil {
 			return nil, fmt.Errorf("scanning SOW: %w", err)
 		}
 		sows = append(sows, s)
@@ -557,19 +619,24 @@ func (q *Queries) ListStatementsOfWork(ctx context.Context, subawardID string) (
 
 func (q *Queries) CreateStatementOfWork(ctx context.Context, s *models.StatementOfWork) error {
 	return q.pool.QueryRow(ctx, `
-		INSERT INTO statements_of_work (subaward_id, fiscal_year, period_start, period_end, budget_amount, scope_text, status)
+		INSERT INTO statements_of_work (subaward_id, fiscal_year, period_start, period_end, budget_id, scope_text, status)
 		VALUES ($1, $2, $3, $4, $5, $6, $7)
 		RETURNING id, created_at, updated_at`,
-		s.SubawardID, s.FiscalYear, s.PeriodStart, s.PeriodEnd, s.BudgetAmount, s.ScopeText, s.Status,
+		s.SubawardID, s.FiscalYear, s.PeriodStart, s.PeriodEnd, s.BudgetID, s.ScopeText, s.Status,
 	).Scan(&s.ID, &s.CreatedAt, &s.UpdatedAt)
 }
 
 func (q *Queries) UpdateStatementOfWork(ctx context.Context, s *models.StatementOfWork) error {
 	_, err := q.pool.Exec(ctx, `
 		UPDATE statements_of_work SET fiscal_year=$2, period_start=$3, period_end=$4,
-		       budget_amount=$5, scope_text=$6, status=$7, signed_doc_id=$8, updated_at=now()
+		       budget_id=$5, scope_text=$6, status=$7, signed_doc_id=$8, updated_at=now()
 		WHERE id=$1`,
-		s.ID, s.FiscalYear, s.PeriodStart, s.PeriodEnd, s.BudgetAmount, s.ScopeText, s.Status, s.SignedDocID)
+		s.ID, s.FiscalYear, s.PeriodStart, s.PeriodEnd, s.BudgetID, s.ScopeText, s.Status, s.SignedDocID)
+	return err
+}
+
+func (q *Queries) DeleteStatementOfWork(ctx context.Context, id string) error {
+	_, err := q.pool.Exec(ctx, `DELETE FROM statements_of_work WHERE id = $1`, id)
 	return err
 }
 
@@ -621,7 +688,37 @@ func (q *Queries) DeleteOverheadRate(ctx context.Context, id string) error {
 	return err
 }
 
+func (q *Queries) GetOverheadRate(ctx context.Context, id string) (*models.OverheadRate, error) {
+	var r models.OverheadRate
+	err := q.pool.QueryRow(ctx, `
+		SELECT id, entity_type, entity_id, rate_name, rate,
+		       COALESCE(description,''), created_at, updated_at
+		FROM institution_overhead_rates WHERE id=$1`, id).Scan(
+		&r.ID, &r.EntityType, &r.EntityID, &r.RateName, &r.Rate,
+		&r.Description, &r.CreatedAt, &r.UpdatedAt)
+	if err != nil {
+		return nil, fmt.Errorf("getting overhead rate: %w", err)
+	}
+	return &r, nil
+}
+
 // --- Budget Line Items ---
+
+func (q *Queries) GetBudgetLineItem(ctx context.Context, id string) (*models.BudgetLineItem, error) {
+	var b models.BudgetLineItem
+	err := q.pool.QueryRow(ctx, `
+		SELECT id, institution_budget_id, line_type, COALESCE(description,''),
+		       personnel_id, effort_months, amount, overhead_rate_id,
+		       COALESCE(notes,''), sort_order, created_at, updated_at
+		FROM budget_line_items WHERE id=$1`, id).Scan(
+		&b.ID, &b.InstitutionBudgetID, &b.LineType, &b.Description,
+		&b.PersonnelID, &b.EffortMonths, &b.Amount, &b.OverheadRateID,
+		&b.Notes, &b.SortOrder, &b.CreatedAt, &b.UpdatedAt)
+	if err != nil {
+		return nil, fmt.Errorf("getting budget line item: %w", err)
+	}
+	return &b, nil
+}
 
 func (q *Queries) ListBudgetLineItems(ctx context.Context, budgetID string) ([]models.BudgetLineItem, error) {
 	rows, err := q.pool.Query(ctx, `
@@ -1200,7 +1297,9 @@ func (q *Queries) RemoveUserRole(ctx context.Context, userID, role string) error
 
 func (q *Queries) ListUserIdentities(ctx context.Context, userID string) ([]models.UserIdentity, error) {
 	rows, err := q.pool.Query(ctx, `
-		SELECT id, user_id, issuer, subject, email, eppn, oidc, cilogon_id, display_name, created_at
+		SELECT id, user_id, issuer, subject,
+		       COALESCE(email,''), COALESCE(eppn,''), COALESCE(oidc,''),
+		       COALESCE(cilogon_id,''), COALESCE(idp_name,''), COALESCE(display_name,''), created_at
 		FROM user_identities WHERE user_id=$1 ORDER BY created_at`, userID)
 	if err != nil {
 		return nil, err
@@ -1209,7 +1308,7 @@ func (q *Queries) ListUserIdentities(ctx context.Context, userID string) ([]mode
 	var ids []models.UserIdentity
 	for rows.Next() {
 		var i models.UserIdentity
-		if err := rows.Scan(&i.ID, &i.UserID, &i.Issuer, &i.Subject, &i.Email, &i.EPPN, &i.OIDC, &i.CILogonID, &i.DisplayName, &i.CreatedAt); err != nil {
+		if err := rows.Scan(&i.ID, &i.UserID, &i.Issuer, &i.Subject, &i.Email, &i.EPPN, &i.OIDC, &i.CILogonID, &i.IdPName, &i.DisplayName, &i.CreatedAt); err != nil {
 			return nil, err
 		}
 		ids = append(ids, i)
@@ -1220,9 +1319,11 @@ func (q *Queries) ListUserIdentities(ctx context.Context, userID string) ([]mode
 func (q *Queries) FindIdentity(ctx context.Context, issuer, subject string) (*models.UserIdentity, error) {
 	var i models.UserIdentity
 	err := q.pool.QueryRow(ctx, `
-		SELECT id, user_id, issuer, subject, email, eppn, oidc, cilogon_id, display_name, created_at
+		SELECT id, user_id, issuer, subject,
+		       COALESCE(email,''), COALESCE(eppn,''), COALESCE(oidc,''),
+		       COALESCE(cilogon_id,''), COALESCE(idp_name,''), COALESCE(display_name,''), created_at
 		FROM user_identities WHERE issuer=$1 AND subject=$2`, issuer, subject).Scan(
-		&i.ID, &i.UserID, &i.Issuer, &i.Subject, &i.Email, &i.EPPN, &i.OIDC, &i.CILogonID, &i.DisplayName, &i.CreatedAt)
+		&i.ID, &i.UserID, &i.Issuer, &i.Subject, &i.Email, &i.EPPN, &i.OIDC, &i.CILogonID, &i.IdPName, &i.DisplayName, &i.CreatedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -1231,9 +1332,9 @@ func (q *Queries) FindIdentity(ctx context.Context, issuer, subject string) (*mo
 
 func (q *Queries) CreateIdentity(ctx context.Context, id *models.UserIdentity) error {
 	return q.pool.QueryRow(ctx, `
-		INSERT INTO user_identities (user_id, issuer, subject, email, eppn, oidc, cilogon_id, display_name)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id, created_at`,
-		id.UserID, id.Issuer, id.Subject, id.Email, id.EPPN, id.OIDC, id.CILogonID, id.DisplayName).Scan(&id.ID, &id.CreatedAt)
+		INSERT INTO user_identities (user_id, issuer, subject, email, eppn, oidc, cilogon_id, idp_name, display_name)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id, created_at`,
+		id.UserID, id.Issuer, id.Subject, id.Email, id.EPPN, id.OIDC, id.CILogonID, id.IdPName, id.DisplayName).Scan(&id.ID, &id.CreatedAt)
 }
 
 func (q *Queries) DeleteIdentity(ctx context.Context, identityID string) error {
@@ -1245,16 +1346,16 @@ func (q *Queries) DeleteIdentity(ctx context.Context, identityID string) error {
 
 func (q *Queries) CreateSession(ctx context.Context, s *models.Session) error {
 	return q.pool.QueryRow(ctx, `
-		INSERT INTO sessions (user_id, role, expires_at)
-		VALUES ($1, $2, $3) RETURNING id, created_at`,
-		s.UserID, s.Role, s.ExpiresAt).Scan(&s.ID, &s.CreatedAt)
+		INSERT INTO sessions (user_id, role, expires_at, token_hash)
+		VALUES ($1, $2, $3, $4) RETURNING id, created_at`,
+		s.UserID, s.Role, s.ExpiresAt, s.TokenHash).Scan(&s.ID, &s.CreatedAt)
 }
 
-func (q *Queries) GetSession(ctx context.Context, id string) (*models.Session, error) {
+func (q *Queries) GetSession(ctx context.Context, tokenHash []byte) (*models.Session, error) {
 	var s models.Session
 	err := q.pool.QueryRow(ctx, `
 		SELECT id, user_id, role, expires_at, created_at
-		FROM sessions WHERE id=$1 AND expires_at > NOW()`, id).Scan(
+		FROM sessions WHERE token_hash=$1 AND expires_at > NOW()`, tokenHash).Scan(
 		&s.ID, &s.UserID, &s.Role, &s.ExpiresAt, &s.CreatedAt)
 	if err != nil {
 		return nil, err
@@ -1262,8 +1363,8 @@ func (q *Queries) GetSession(ctx context.Context, id string) (*models.Session, e
 	return &s, nil
 }
 
-func (q *Queries) DeleteSession(ctx context.Context, id string) error {
-	_, err := q.pool.Exec(ctx, `DELETE FROM sessions WHERE id=$1`, id)
+func (q *Queries) DeleteSession(ctx context.Context, tokenHash []byte) error {
+	_, err := q.pool.Exec(ctx, `DELETE FROM sessions WHERE token_hash=$1`, tokenHash)
 	return err
 }
 
@@ -1276,17 +1377,17 @@ func (q *Queries) DeleteUserSessions(ctx context.Context, userID string) error {
 
 func (q *Queries) CreateInvite(ctx context.Context, inv *models.Invite) error {
 	return q.pool.QueryRow(ctx, `
-		INSERT INTO invites (token, user_id, role, expires_at)
-		VALUES ($1, $2, $3, $4) RETURNING id, created_at`,
-		inv.Token, inv.UserID, inv.Role, inv.ExpiresAt).Scan(&inv.ID, &inv.CreatedAt)
+		INSERT INTO invites (token, token_hash, user_id, expires_at)
+		VALUES ('', $1, $2, $3) RETURNING id, created_at`,
+		inv.TokenHash, inv.UserID, inv.ExpiresAt).Scan(&inv.ID, &inv.CreatedAt)
 }
 
-func (q *Queries) GetInviteByToken(ctx context.Context, token string) (*models.Invite, error) {
+func (q *Queries) GetInviteByToken(ctx context.Context, tokenHash []byte) (*models.Invite, error) {
 	var inv models.Invite
 	err := q.pool.QueryRow(ctx, `
-		SELECT id, token, user_id, role, used, expires_at, created_at
-		FROM invites WHERE token=$1`, token).Scan(
-		&inv.ID, &inv.Token, &inv.UserID, &inv.Role, &inv.Used, &inv.ExpiresAt, &inv.CreatedAt)
+		SELECT id, user_id, used, expires_at, created_at
+		FROM invites WHERE token_hash=$1`, tokenHash).Scan(
+		&inv.ID, &inv.UserID, &inv.Used, &inv.ExpiresAt, &inv.CreatedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -1300,7 +1401,7 @@ func (q *Queries) MarkInviteUsed(ctx context.Context, id string) error {
 
 func (q *Queries) ListInvites(ctx context.Context, userID string) ([]models.Invite, error) {
 	rows, err := q.pool.Query(ctx, `
-		SELECT id, token, user_id, role, used, expires_at, created_at
+		SELECT id, user_id, used, expires_at, created_at
 		FROM invites WHERE user_id=$1 ORDER BY created_at DESC`, userID)
 	if err != nil {
 		return nil, err
@@ -1309,7 +1410,7 @@ func (q *Queries) ListInvites(ctx context.Context, userID string) ([]models.Invi
 	var invites []models.Invite
 	for rows.Next() {
 		var inv models.Invite
-		if err := rows.Scan(&inv.ID, &inv.Token, &inv.UserID, &inv.Role, &inv.Used, &inv.ExpiresAt, &inv.CreatedAt); err != nil {
+		if err := rows.Scan(&inv.ID, &inv.UserID, &inv.Used, &inv.ExpiresAt, &inv.CreatedAt); err != nil {
 			return nil, err
 		}
 		invites = append(invites, inv)
@@ -1353,6 +1454,39 @@ func (q *Queries) ListBudgetDocuments(ctx context.Context, entityType, entityID 
 	rows, err := q.pool.Query(ctx, query, entityType, entityID)
 	if err != nil {
 		return nil, fmt.Errorf("listing budget documents: %w", err)
+	}
+	defer rows.Close()
+
+	var docs []models.BudgetDocument
+	for rows.Next() {
+		var d models.BudgetDocument
+		if err := rows.Scan(
+			&d.ID, &d.EntityType, &d.EntityID, &d.BudgetID, &d.DocType,
+			&d.Filename, &d.ContentType, &d.S3Key, &d.FileSize,
+			&d.EncryptedDEK, &d.DEKNonce,
+			&d.UploadedBy, &d.UploadedName, &d.Notes,
+			&d.CreatedAt, &d.DeletedAt, &d.DeletedBy,
+		); err != nil {
+			return nil, fmt.Errorf("scanning budget document: %w", err)
+		}
+		docs = append(docs, d)
+	}
+	return docs, nil
+}
+
+func (q *Queries) ListAllBudgetDocuments(ctx context.Context) ([]models.BudgetDocument, error) {
+	rows, err := q.pool.Query(ctx, `
+		SELECT bd.id, bd.entity_type, bd.entity_id, bd.budget_id, bd.doc_type,
+		       bd.filename, bd.content_type, bd.s3_key, bd.file_size,
+		       bd.encrypted_dek, bd.dek_nonce,
+		       bd.uploaded_by, COALESCE(u.display_name, ''), bd.notes,
+		       bd.created_at, bd.deleted_at, bd.deleted_by
+		FROM budget_documents bd
+		LEFT JOIN users u ON u.id = bd.uploaded_by
+		WHERE bd.deleted_at IS NULL
+		ORDER BY bd.created_at`)
+	if err != nil {
+		return nil, fmt.Errorf("listing all budget documents: %w", err)
 	}
 	defer rows.Close()
 
@@ -1605,4 +1739,390 @@ func (q *Queries) GetObjectHash(ctx context.Context, s3Key string) (*models.Obje
 func (q *Queries) DeleteObjectHash(ctx context.Context, s3Key string) error {
 	_, err := q.pool.Exec(ctx, `DELETE FROM object_hashes WHERE s3_key = $1`, s3Key)
 	return err
+}
+
+// --- User Institution Access (subaward_admin) ---
+
+func (q *Queries) ListUserInstitutions(ctx context.Context, userID string) ([]models.UserInstitutionAccess, error) {
+	rows, err := q.pool.Query(ctx, `
+		SELECT id, user_id, institution, created_at
+		FROM user_institution_access WHERE user_id=$1 ORDER BY institution`, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []models.UserInstitutionAccess
+	for rows.Next() {
+		var a models.UserInstitutionAccess
+		if err := rows.Scan(&a.ID, &a.UserID, &a.Institution, &a.CreatedAt); err != nil {
+			return nil, err
+		}
+		items = append(items, a)
+	}
+	return items, nil
+}
+
+func (q *Queries) AddUserInstitution(ctx context.Context, userID, institution string) error {
+	_, err := q.pool.Exec(ctx, `
+		INSERT INTO user_institution_access (user_id, institution)
+		VALUES ($1, $2) ON CONFLICT (user_id, institution) DO NOTHING`, userID, institution)
+	return err
+}
+
+func (q *Queries) RemoveUserInstitution(ctx context.Context, userID, institution string) error {
+	_, err := q.pool.Exec(ctx, `
+		DELETE FROM user_institution_access WHERE user_id=$1 AND institution=$2`, userID, institution)
+	return err
+}
+
+func (q *Queries) ListUserInstitutionNames(ctx context.Context, userID string) ([]string, error) {
+	rows, err := q.pool.Query(ctx, `
+		SELECT institution FROM user_institution_access WHERE user_id=$1 ORDER BY institution`, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var names []string
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return nil, err
+		}
+		names = append(names, name)
+	}
+	return names, nil
+}
+
+// --- SOW Config ---
+
+func (q *Queries) GetSOWConfig(ctx context.Context, grantID string) (*models.SOWConfig, error) {
+	var c models.SOWConfig
+	err := q.pool.QueryRow(ctx, `
+		SELECT id, grant_id, header_title, header_subtitle, project_name,
+		       intro_template, costs_template, concurrence_signers::text,
+		       created_at, updated_at
+		FROM sow_configs WHERE grant_id = $1`, grantID).Scan(
+		&c.ID, &c.GrantID, &c.HeaderTitle, &c.HeaderSubtitle, &c.ProjectName,
+		&c.IntroTemplate, &c.CostsTemplate, &c.ConcurrenceSigners,
+		&c.CreatedAt, &c.UpdatedAt)
+	if err != nil {
+		return nil, fmt.Errorf("getting SOW config: %w", err)
+	}
+	return &c, nil
+}
+
+func (q *Queries) UpsertSOWConfig(ctx context.Context, c *models.SOWConfig) error {
+	return q.pool.QueryRow(ctx, `
+		INSERT INTO sow_configs (grant_id, header_title, header_subtitle, project_name,
+		                         intro_template, costs_template, concurrence_signers)
+		VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb)
+		ON CONFLICT (grant_id) DO UPDATE SET
+		    header_title = EXCLUDED.header_title,
+		    header_subtitle = EXCLUDED.header_subtitle,
+		    project_name = EXCLUDED.project_name,
+		    intro_template = EXCLUDED.intro_template,
+		    costs_template = EXCLUDED.costs_template,
+		    concurrence_signers = EXCLUDED.concurrence_signers,
+		    updated_at = now()
+		RETURNING id, created_at, updated_at`,
+		c.GrantID, c.HeaderTitle, c.HeaderSubtitle, c.ProjectName,
+		c.IntroTemplate, c.CostsTemplate, c.ConcurrenceSigners,
+	).Scan(&c.ID, &c.CreatedAt, &c.UpdatedAt)
+}
+
+// --- SOW Personnel Descriptions ---
+
+func (q *Queries) ListSOWPersonnelDescriptions(ctx context.Context, sowID string) ([]models.SOWPersonnelDescription, error) {
+	rows, err := q.pool.Query(ctx, `
+		SELECT id, sow_id, personnel_id, description_md, sort_order, created_at, updated_at
+		FROM sow_personnel_descriptions WHERE sow_id = $1 ORDER BY sort_order, created_at`, sowID)
+	if err != nil {
+		return nil, fmt.Errorf("listing SOW personnel descriptions: %w", err)
+	}
+	defer rows.Close()
+
+	var items []models.SOWPersonnelDescription
+	for rows.Next() {
+		var d models.SOWPersonnelDescription
+		if err := rows.Scan(&d.ID, &d.SOWID, &d.PersonnelID, &d.DescriptionMD, &d.SortOrder, &d.CreatedAt, &d.UpdatedAt); err != nil {
+			return nil, fmt.Errorf("scanning SOW personnel desc: %w", err)
+		}
+		items = append(items, d)
+	}
+	return items, nil
+}
+
+func (q *Queries) UpsertSOWPersonnelDescription(ctx context.Context, d *models.SOWPersonnelDescription) error {
+	return q.pool.QueryRow(ctx, `
+		INSERT INTO sow_personnel_descriptions (sow_id, personnel_id, description_md, sort_order)
+		VALUES ($1, $2, $3, $4)
+		ON CONFLICT (sow_id, personnel_id) DO UPDATE SET
+		    description_md = EXCLUDED.description_md,
+		    sort_order = EXCLUDED.sort_order,
+		    updated_at = now()
+		RETURNING id, created_at, updated_at`,
+		d.SOWID, d.PersonnelID, d.DescriptionMD, d.SortOrder,
+	).Scan(&d.ID, &d.CreatedAt, &d.UpdatedAt)
+}
+
+func (q *Queries) DeleteSOWPersonnelDescription(ctx context.Context, id string) error {
+	_, err := q.pool.Exec(ctx, `DELETE FROM sow_personnel_descriptions WHERE id=$1`, id)
+	return err
+}
+
+// --- SOW Line Item Descriptions ---
+
+func (q *Queries) ListSOWLineItemDescriptions(ctx context.Context, sowID string) ([]models.SOWLineItemDescription, error) {
+	rows, err := q.pool.Query(ctx, `
+		SELECT id, sow_id, line_item_id, description_md, sort_order, created_at, updated_at
+		FROM sow_line_item_descriptions WHERE sow_id = $1 ORDER BY sort_order, created_at`, sowID)
+	if err != nil {
+		return nil, fmt.Errorf("listing SOW line item descriptions: %w", err)
+	}
+	defer rows.Close()
+
+	var items []models.SOWLineItemDescription
+	for rows.Next() {
+		var d models.SOWLineItemDescription
+		if err := rows.Scan(&d.ID, &d.SOWID, &d.LineItemID, &d.DescriptionMD, &d.SortOrder, &d.CreatedAt, &d.UpdatedAt); err != nil {
+			return nil, fmt.Errorf("scanning SOW line item desc: %w", err)
+		}
+		items = append(items, d)
+	}
+	return items, nil
+}
+
+func (q *Queries) UpsertSOWLineItemDescription(ctx context.Context, d *models.SOWLineItemDescription) error {
+	return q.pool.QueryRow(ctx, `
+		INSERT INTO sow_line_item_descriptions (sow_id, line_item_id, description_md, sort_order)
+		VALUES ($1, $2, $3, $4)
+		ON CONFLICT (sow_id, line_item_id) DO UPDATE SET
+		    description_md = EXCLUDED.description_md,
+		    sort_order = EXCLUDED.sort_order,
+		    updated_at = now()
+		RETURNING id, created_at, updated_at`,
+		d.SOWID, d.LineItemID, d.DescriptionMD, d.SortOrder,
+	).Scan(&d.ID, &d.CreatedAt, &d.UpdatedAt)
+}
+
+func (q *Queries) DeleteSOWLineItemDescription(ctx context.Context, id string) error {
+	_, err := q.pool.Exec(ctx, `DELETE FROM sow_line_item_descriptions WHERE id=$1`, id)
+	return err
+}
+
+// GetStatementOfWork returns a single SOW by ID.
+func (q *Queries) GetStatementOfWork(ctx context.Context, id string) (*models.StatementOfWork, error) {
+	var s models.StatementOfWork
+	err := q.pool.QueryRow(ctx, `
+		SELECT id, subaward_id, fiscal_year, period_start::text, period_end::text,
+		       budget_id, COALESCE(scope_text, ''), status, signed_doc_id,
+		       created_at, updated_at
+		FROM statements_of_work WHERE id = $1`, id).Scan(
+		&s.ID, &s.SubawardID, &s.FiscalYear, &s.PeriodStart, &s.PeriodEnd,
+		&s.BudgetID, &s.ScopeText, &s.Status, &s.SignedDocID,
+		&s.CreatedAt, &s.UpdatedAt)
+	if err != nil {
+		return nil, fmt.Errorf("getting SOW: %w", err)
+	}
+	return &s, nil
+}
+
+// --- Budget Overview ---
+
+// BudgetOverviewByInstitution returns line-item totals grouped by institution, year, and category.
+func (q *Queries) BudgetOverviewByInstitution(ctx context.Context, grantID string) ([]models.BudgetInstitutionRow, error) {
+	return q.BudgetOverviewByInstitutionFiltered(ctx, grantID, nil)
+}
+
+// BudgetOverviewByInstitutionFiltered returns line-item totals grouped by institution, year, and category.
+// When institutions is non-nil, only budgets for those institution names are included.
+func (q *Queries) BudgetOverviewByInstitutionFiltered(ctx context.Context, grantID string, institutions []string) ([]models.BudgetInstitutionRow, error) {
+	var query string
+	var args []interface{}
+
+	if len(institutions) > 0 {
+		query = `
+		SELECT ib.entity_type, ib.entity_id, ib.fiscal_year, ib.id, ib.status,
+		       li.line_type, SUM(li.amount)
+		FROM institution_budgets ib
+		JOIN budget_line_items li ON li.institution_budget_id = ib.id
+		WHERE ib.is_latest = true
+		AND (
+			(ib.entity_type = 'grant' AND ib.entity_id IN (SELECT id FROM grants WHERE id = $1 AND institution = ANY($2)))
+			OR
+			(ib.entity_type = 'subaward' AND ib.entity_id IN (SELECT id FROM subawards WHERE grant_id = $1 AND institution = ANY($2)))
+		)
+		GROUP BY ib.entity_type, ib.entity_id, ib.fiscal_year, ib.id, ib.status, li.line_type
+		ORDER BY ib.entity_type DESC, ib.entity_id, ib.fiscal_year`
+		args = []interface{}{grantID, institutions}
+	} else {
+		query = `
+		SELECT ib.entity_type, ib.entity_id, ib.fiscal_year, ib.id, ib.status,
+		       li.line_type, SUM(li.amount)
+		FROM institution_budgets ib
+		JOIN budget_line_items li ON li.institution_budget_id = ib.id
+		WHERE ib.is_latest = true
+		AND (
+			(ib.entity_type = 'grant' AND ib.entity_id = $1)
+			OR
+			(ib.entity_type = 'subaward' AND ib.entity_id IN (SELECT id FROM subawards WHERE grant_id = $1))
+		)
+		GROUP BY ib.entity_type, ib.entity_id, ib.fiscal_year, ib.id, ib.status, li.line_type
+		ORDER BY ib.entity_type DESC, ib.entity_id, ib.fiscal_year`
+		args = []interface{}{grantID}
+	}
+
+	rows, err := q.pool.Query(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("budget overview by institution: %w", err)
+	}
+	defer rows.Close()
+
+	var result []models.BudgetInstitutionRow
+	for rows.Next() {
+		var r models.BudgetInstitutionRow
+		if err := rows.Scan(&r.EntityType, &r.EntityID, &r.FiscalYear, &r.BudgetID, &r.Status, &r.LineType, &r.Amount); err != nil {
+			return nil, fmt.Errorf("scanning budget institution row: %w", err)
+		}
+		result = append(result, r)
+	}
+	return result, nil
+}
+
+// BudgetOverviewByWBS returns budget amounts allocated to each WBS area (and unassigned) by year.
+func (q *Queries) BudgetOverviewByWBS(ctx context.Context, grantID string) ([]models.BudgetWBSRow, error) {
+	return q.BudgetOverviewByWBSFiltered(ctx, grantID, nil)
+}
+
+// BudgetOverviewByWBSFiltered returns WBS area budget amounts, optionally filtered by institution names.
+func (q *Queries) BudgetOverviewByWBSFiltered(ctx context.Context, grantID string, institutions []string) ([]models.BudgetWBSRow, error) {
+	var instFilter string
+	var args []interface{}
+
+	if len(institutions) > 0 {
+		instFilter = `
+			AND (
+				(ib.entity_type = 'grant' AND ib.entity_id IN (SELECT id FROM grants WHERE id = $1 AND institution = ANY($2)))
+				OR
+				(ib.entity_type = 'subaward' AND ib.entity_id IN (SELECT id FROM subawards WHERE grant_id = $1 AND institution = ANY($2)))
+			)`
+		args = []interface{}{grantID, institutions}
+	} else {
+		instFilter = `
+			AND (
+				(ib.entity_type = 'grant' AND ib.entity_id = $1)
+				OR
+				(ib.entity_type = 'subaward' AND ib.entity_id IN (SELECT id FROM subawards WHERE grant_id = $1))
+			)`
+		args = []interface{}{grantID}
+	}
+
+	query := `
+		WITH budget_scope AS (
+			SELECT ib.id, ib.fiscal_year
+			FROM institution_budgets ib
+			WHERE ib.is_latest = true` + instFilter + `
+		),
+		wbs_allocated AS (
+			SELECT bs.fiscal_year, w.wbs_area_id::text, SUM(li.amount * w.allocation_percent / 100.0) as amount
+			FROM budget_scope bs
+			JOIN budget_line_items li ON li.institution_budget_id = bs.id
+			JOIN budget_line_item_wbs w ON w.line_item_id = li.id
+			GROUP BY bs.fiscal_year, w.wbs_area_id
+		),
+		unassigned AS (
+			SELECT bs.fiscal_year, SUM(li.amount * (100.0 - COALESCE(alloc.total_pct, 0)) / 100.0) as amount
+			FROM budget_scope bs
+			JOIN budget_line_items li ON li.institution_budget_id = bs.id
+			LEFT JOIN (
+				SELECT line_item_id, SUM(allocation_percent) as total_pct
+				FROM budget_line_item_wbs GROUP BY line_item_id
+			) alloc ON alloc.line_item_id = li.id
+			WHERE COALESCE(alloc.total_pct, 0) < 100.0
+			GROUP BY bs.fiscal_year
+		)
+		SELECT fiscal_year, wbs_area_id, amount FROM wbs_allocated
+		UNION ALL
+		SELECT fiscal_year, NULL::text, amount FROM unassigned
+		ORDER BY 2 NULLS LAST, 1`
+
+	rows, err := q.pool.Query(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("budget overview by WBS: %w", err)
+	}
+	defer rows.Close()
+
+	var result []models.BudgetWBSRow
+	for rows.Next() {
+		var r models.BudgetWBSRow
+		if err := rows.Scan(&r.FiscalYear, &r.WBSAreaID, &r.Amount); err != nil {
+			return nil, fmt.Errorf("scanning budget WBS row: %w", err)
+		}
+		result = append(result, r)
+	}
+	return result, nil
+}
+
+// BudgetOverheadBases returns the F&A base amounts grouped by entity, year, and overhead rate.
+// It excludes equipment and participant_support from the base (NSF MTDC rules).
+func (q *Queries) BudgetOverheadBases(ctx context.Context, grantID string) ([]models.OverheadBaseRow, error) {
+	return q.BudgetOverheadBasesFiltered(ctx, grantID, nil)
+}
+
+// BudgetOverheadBasesFiltered returns overhead bases, optionally filtered by institution names.
+func (q *Queries) BudgetOverheadBasesFiltered(ctx context.Context, grantID string, institutions []string) ([]models.OverheadBaseRow, error) {
+	var query string
+	var args []interface{}
+
+	if len(institutions) > 0 {
+		query = `
+		SELECT ib.entity_type, ib.entity_id, ib.fiscal_year,
+		       li.overhead_rate_id, SUM(li.amount)
+		FROM institution_budgets ib
+		JOIN budget_line_items li ON li.institution_budget_id = ib.id
+		WHERE ib.is_latest = true
+		AND (
+			(ib.entity_type = 'grant' AND ib.entity_id IN (SELECT id FROM grants WHERE id = $1 AND institution = ANY($2)))
+			OR
+			(ib.entity_type = 'subaward' AND ib.entity_id IN (SELECT id FROM subawards WHERE grant_id = $1 AND institution = ANY($2)))
+		)
+		AND li.overhead_rate_id IS NOT NULL
+		AND li.line_type NOT IN ('equipment', 'participant_support')
+		GROUP BY ib.entity_type, ib.entity_id, ib.fiscal_year, li.overhead_rate_id
+		ORDER BY ib.entity_type DESC, ib.entity_id, ib.fiscal_year`
+		args = []interface{}{grantID, institutions}
+	} else {
+		query = `
+		SELECT ib.entity_type, ib.entity_id, ib.fiscal_year,
+		       li.overhead_rate_id, SUM(li.amount)
+		FROM institution_budgets ib
+		JOIN budget_line_items li ON li.institution_budget_id = ib.id
+		WHERE ib.is_latest = true
+		AND (
+			(ib.entity_type = 'grant' AND ib.entity_id = $1)
+			OR
+			(ib.entity_type = 'subaward' AND ib.entity_id IN (SELECT id FROM subawards WHERE grant_id = $1))
+		)
+		AND li.overhead_rate_id IS NOT NULL
+		AND li.line_type NOT IN ('equipment', 'participant_support')
+		GROUP BY ib.entity_type, ib.entity_id, ib.fiscal_year, li.overhead_rate_id
+		ORDER BY ib.entity_type DESC, ib.entity_id, ib.fiscal_year`
+		args = []interface{}{grantID}
+	}
+
+	rows, err := q.pool.Query(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("budget overhead bases: %w", err)
+	}
+	defer rows.Close()
+
+	var result []models.OverheadBaseRow
+	for rows.Next() {
+		var r models.OverheadBaseRow
+		if err := rows.Scan(&r.EntityType, &r.EntityID, &r.FiscalYear, &r.OverheadRateID, &r.BaseAmount); err != nil {
+			return nil, fmt.Errorf("scanning overhead base row: %w", err)
+		}
+		result = append(result, r)
+	}
+	return result, nil
 }

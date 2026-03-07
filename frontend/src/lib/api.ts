@@ -45,6 +45,7 @@ export interface SessionInfo {
   user: AppUser | null;
   role: string;
   roles: string[];
+  institutions?: string[];
   is_dev_login?: boolean;
 }
 
@@ -63,6 +64,7 @@ export interface UserIdentity {
   eppn?: string;
   oidc?: string;
   cilogon_id?: string;
+  idp_name?: string;
   display_name?: string;
   created_at: string;
 }
@@ -70,13 +72,13 @@ export interface UserIdentity {
 export interface UserInfo extends AppUser {
   roles: string[];
   identities: UserIdentity[];
+  institutions: string[];
 }
 
 export interface InviteInfo {
   id: string;
   token: string;
   user_id: string;
-  role: string;
   used: boolean;
   expires_at: string;
   created_at: string;
@@ -201,7 +203,9 @@ export interface PersonnelBudgetEntry {
   institution: string;
   fiscal_year: number;
   effort_months: number;
-  amount: number;
+  salary_amount: number;
+  fringe_amount: number;
+  salary_escalation_rate: number;
 }
 
 // New budget model types
@@ -224,7 +228,7 @@ export interface BudgetLineItem {
   personnel_id?: string;
   effort_months: number;
   amount: number;
-  overhead_rate_id?: string;
+  overhead_rate_id?: string | null;
   notes?: string;
   sort_order: number;
   created_at: string;
@@ -331,16 +335,91 @@ export interface BudgetSummaryByYear {
   percent_spent: number;
 }
 
+// --- Budget Overview ---
+
+export interface BudgetOverviewYear {
+  budget_id: string;
+  status: string;
+  total: number;
+  direct_costs: number;
+  indirect_costs: number;
+  by_category: Record<string, number>;
+}
+
+export interface BudgetOverviewInstitution {
+  entity_type: string;
+  entity_id: string;
+  name: string;
+  is_lead: boolean;
+  years: Record<string, BudgetOverviewYear>;
+  total: number;
+  direct_total: number;
+  indirect_total: number;
+}
+
+export interface BudgetOverviewWBS {
+  wbs_area_id: string | null;
+  code: string;
+  name: string;
+  years: Record<string, number>;
+  total: number;
+}
+
+export interface BudgetOverviewResponse {
+  institutions: BudgetOverviewInstitution[];
+  wbs_areas: BudgetOverviewWBS[];
+  yearly_totals: Record<string, number>;
+  yearly_direct: Record<string, number>;
+  yearly_indirect: Record<string, number>;
+  grand_total: number;
+  grand_direct: number;
+  grand_indirect: number;
+  award_total: number;
+}
+
 export interface StatementOfWork {
   id: string;
   subaward_id: string;
   fiscal_year: number;
   period_start: string;
   period_end: string;
-  budget_amount: number;
+  budget_id?: string;
   scope_text?: string;
   status: string;
   signed_doc_id?: string;
+}
+
+export interface SOWConfig {
+  id: string;
+  grant_id: string;
+  header_title: string;
+  header_subtitle: string;
+  project_name: string;
+  intro_template: string;
+  costs_template: string;
+  concurrence_signers: string; // JSON array
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface SOWPersonnelDescription {
+  id: string;
+  sow_id: string;
+  personnel_id: string;
+  description_md: string;
+  sort_order: number;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface SOWLineItemDescription {
+  id: string;
+  sow_id: string;
+  line_item_id: string;
+  description_md: string;
+  sort_order: number;
+  created_at?: string;
+  updated_at?: string;
 }
 
 // --- Grants ---
@@ -372,6 +451,12 @@ export const api = {
       // TODO: implement backend aggregate endpoint
       return [];
     },
+    overview: (grantId: string, institutions?: string[]) => {
+      const params = institutions?.length
+        ? `?institutions=${institutions.map(encodeURIComponent).join(',')}`
+        : '';
+      return fetchJSON<BudgetOverviewResponse>(`/grants/${grantId}/budget-overview${params}`);
+    },
   },
 
   wbs: {
@@ -383,8 +468,12 @@ export const api = {
       fetchJSON<WBSArea>(`/grants/${grantId}/wbs/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
     delete: (grantId: string, id: string) =>
       fetchJSON<void>(`/grants/${grantId}/wbs/${id}`, { method: 'DELETE' }),
-    effortSummary: (grantId: string) =>
-      fetchJSON<WBSEffortSummary[]>(`/grants/${grantId}/wbs/effort-summary`),
+    effortSummary: (grantId: string, institutions?: string[]) => {
+      const params = institutions?.length
+        ? `?institutions=${institutions.map(encodeURIComponent).join(',')}`
+        : '';
+      return fetchJSON<WBSEffortSummary[]>(`/grants/${grantId}/wbs/effort-summary${params}`);
+    },
   },
 
   personnel: {
@@ -557,6 +646,8 @@ export const api = {
         method: 'PUT',
         body: JSON.stringify(data),
       }),
+    delete: (grantId: string, subawardId: string, id: string) =>
+      fetchJSON<void>(`/grants/${grantId}/subawards/${subawardId}/sow/${id}`, { method: 'DELETE' }),
     uploadSigned: async (grantId: string, subawardId: string, sowId: string, file: File) => {
       const form = new FormData();
       form.append('file', file);
@@ -567,6 +658,40 @@ export const api = {
       if (!res.ok) throw new Error('Upload failed');
       return res.json() as Promise<Document>;
     },
+    renderUrl: (grantId: string, subawardId: string, sowId: string) =>
+      `${API_BASE}/grants/${grantId}/subawards/${subawardId}/sow/${sowId}/render`,
+
+    // Personnel descriptions
+    listPersonnelDescriptions: (grantId: string, subawardId: string, sowId: string) =>
+      fetchJSON<SOWPersonnelDescription[]>(`/grants/${grantId}/subawards/${subawardId}/sow/${sowId}/personnel-descriptions`),
+    upsertPersonnelDescription: (grantId: string, subawardId: string, sowId: string, data: Partial<SOWPersonnelDescription>) =>
+      fetchJSON<SOWPersonnelDescription>(`/grants/${grantId}/subawards/${subawardId}/sow/${sowId}/personnel-descriptions`, {
+        method: 'PUT',
+        body: JSON.stringify(data),
+      }),
+    deletePersonnelDescription: (grantId: string, subawardId: string, sowId: string, descId: string) =>
+      fetchJSON<void>(`/grants/${grantId}/subawards/${subawardId}/sow/${sowId}/personnel-descriptions/${descId}`, { method: 'DELETE' }),
+
+    // Line item descriptions
+    listLineItemDescriptions: (grantId: string, subawardId: string, sowId: string) =>
+      fetchJSON<SOWLineItemDescription[]>(`/grants/${grantId}/subawards/${subawardId}/sow/${sowId}/line-item-descriptions`),
+    upsertLineItemDescription: (grantId: string, subawardId: string, sowId: string, data: Partial<SOWLineItemDescription>) =>
+      fetchJSON<SOWLineItemDescription>(`/grants/${grantId}/subawards/${subawardId}/sow/${sowId}/line-item-descriptions`, {
+        method: 'PUT',
+        body: JSON.stringify(data),
+      }),
+    deleteLineItemDescription: (grantId: string, subawardId: string, sowId: string, descId: string) =>
+      fetchJSON<void>(`/grants/${grantId}/subawards/${subawardId}/sow/${sowId}/line-item-descriptions/${descId}`, { method: 'DELETE' }),
+  },
+
+  sowConfig: {
+    get: (grantId: string) =>
+      fetchJSON<SOWConfig>(`/grants/${grantId}/sow-config`),
+    upsert: (grantId: string, data: Partial<SOWConfig>) =>
+      fetchJSON<SOWConfig>(`/grants/${grantId}/sow-config`, {
+        method: 'PUT',
+        body: JSON.stringify(data),
+      }),
   },
 
   documents: {
@@ -672,6 +797,15 @@ export const api = {
       fetchJSON<InviteInfo[]>(`/admin/users/${userId}/invites`),
     deleteInvite: (userId: string, inviteId: string) =>
       fetchJSON<void>(`/admin/users/${userId}/invites/${inviteId}`, { method: 'DELETE' }),
+    listUserInstitutions: (userId: string) =>
+      fetchJSON<string[]>(`/admin/users/${userId}/institutions`),
+    addUserInstitution: (userId: string, institution: string) =>
+      fetchJSON<void>(`/admin/users/${userId}/institutions`, {
+        method: 'POST',
+        body: JSON.stringify({ institution }),
+      }),
+    removeUserInstitution: (userId: string, institution: string) =>
+      fetchJSON<void>(`/admin/users/${userId}/institutions/${encodeURIComponent(institution)}`, { method: 'DELETE' }),
     getOIDCConfig: () => fetchJSON<OIDCConfig>('/admin/oidc-config'),
     updateOIDCConfig: (data: { oidc_issuer?: string; oidc_client_id?: string; oidc_client_secret?: string }) =>
       fetchJSON<void>('/admin/oidc-config', {

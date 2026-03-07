@@ -2,13 +2,16 @@ package config
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 
 	"github.com/kelseyhightower/envconfig"
 	"github.com/rs/zerolog/log"
+	"golang.org/x/crypto/hkdf"
 )
 
 // Config holds all application configuration, populated from environment variables.
@@ -34,14 +37,14 @@ type Config struct {
 	OIDCClientID     string `envconfig:"OIDC_CLIENT_ID" default:""`
 	OIDCClientSecret string `envconfig:"OIDC_CLIENT_SECRET" default:""`
 
-	// Session
-	SessionSecret string `envconfig:"SESSION_SECRET" default:"dev-secret-change-me-in-prod"`
+	// SessionSecret is derived from the master key at startup (not user-configurable).
+	SessionSecret string `envconfig:"-"`
 
 	// Backup
 	BackupDir string `envconfig:"BACKUP_DIR" default:"/tmp/fabaid-backup"`
 
-	// Document encryption
-	DocumentMasterKey string `envconfig:"DOCUMENT_MASTER_KEY" default:""`
+	// Instance encryption key
+	InstanceKey string `envconfig:"INSTANCE_KEY" default:""`
 }
 
 // Load reads configuration from environment variables.
@@ -56,12 +59,12 @@ func Load() (*Config, error) {
 // masterKeyFile is the filename used to persist an auto-generated master key.
 const masterKeyFile = ".fabaid-master.key"
 
-// EnsureMasterKey checks whether DocumentMasterKey is set. If it is empty
+// EnsureMasterKey checks whether InstanceKey is set. If it is empty
 // it tries to load a previously-generated key from disk; failing that it
 // generates a new random 32-byte key, saves it to disk, and populates the
 // config field. The key file is meant to be git-ignored.
 func (c *Config) EnsureMasterKey() error {
-	if c.DocumentMasterKey != "" {
+	if c.InstanceKey != "" {
 		return nil
 	}
 
@@ -70,7 +73,7 @@ func (c *Config) EnsureMasterKey() error {
 	if err == nil {
 		key := strings.TrimSpace(string(data))
 		if len(key) == 64 {
-			c.DocumentMasterKey = key
+			c.InstanceKey = key
 			log.Info().Str("file", masterKeyFile).Msg("Loaded document master key from disk")
 			return nil
 		}
@@ -89,8 +92,27 @@ func (c *Config) EnsureMasterKey() error {
 		return fmt.Errorf("saving master key to %s: %w", masterKeyFile, err)
 	}
 
-	c.DocumentMasterKey = keyHex
-	log.Info().Str("file", masterKeyFile).Msg("Generated and saved new document master key")
+	c.InstanceKey = keyHex
+	log.Info().Str("file", masterKeyFile).Msg("Generated and saved new instance key")
+	return nil
+}
+
+// DeriveSessionSecret derives the session HMAC secret from the master key
+// via HKDF-SHA256. Must be called after EnsureMasterKey.
+func (c *Config) DeriveSessionSecret() error {
+	if c.InstanceKey == "" {
+		return fmt.Errorf("instance key must be set before deriving session secret")
+	}
+	masterKey, err := hex.DecodeString(c.InstanceKey)
+	if err != nil {
+		return fmt.Errorf("decoding master key: %w", err)
+	}
+	r := hkdf.New(sha256.New, masterKey, nil, []byte("fabaid-session-secret"))
+	buf := make([]byte, 32)
+	if _, err := io.ReadFull(r, buf); err != nil {
+		return fmt.Errorf("deriving session secret: %w", err)
+	}
+	c.SessionSecret = hex.EncodeToString(buf)
 	return nil
 }
 

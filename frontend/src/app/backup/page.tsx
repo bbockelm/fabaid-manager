@@ -415,25 +415,25 @@ export default function BackupPage() {
                         </a>
                       )}
                       {b.status === 'completed' && isAdmin && (
-                        <>
-                          <button
-                            onClick={() => handleRestore(b)}
-                            disabled={restoring === b.id}
-                            className="px-2 py-1 text-xs bg-amber-100 hover:bg-amber-200 rounded transition-colors disabled:opacity-50"
-                            title="Restore from this backup"
-                          >
-                            {restoring === b.id ? '...' : '🔄'}
-                          </button>
-                          <button
-                            onClick={() => {
-                              if (confirm('Delete this backup?')) deleteMutation.mutate(b.id);
-                            }}
-                            className="px-2 py-1 text-xs bg-red-100 hover:bg-red-200 rounded transition-colors"
-                            title="Delete backup"
-                          >
-                            🗑️
-                          </button>
-                        </>
+                        <button
+                          onClick={() => handleRestore(b)}
+                          disabled={restoring === b.id}
+                          className="px-2 py-1 text-xs bg-amber-100 hover:bg-amber-200 rounded transition-colors disabled:opacity-50"
+                          title="Restore from this backup"
+                        >
+                          {restoring === b.id ? '...' : '🔄'}
+                        </button>
+                      )}
+                      {(b.status === 'completed' || b.status === 'failed') && isAdmin && (
+                        <button
+                          onClick={() => {
+                            if (confirm('Delete this backup?')) deleteMutation.mutate(b.id);
+                          }}
+                          className="px-2 py-1 text-xs bg-red-100 hover:bg-red-200 rounded transition-colors"
+                          title="Delete backup"
+                        >
+                          🗑️
+                        </button>
                       )}
                     </div>
                   </td>

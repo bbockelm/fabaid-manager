@@ -9,7 +9,11 @@ interface AuthContextType {
   isLoading: boolean;
   isAuthenticated: boolean;
   isAdmin: boolean;
+  isGrantAdmin: boolean;
+  isSubawardAdmin: boolean;
   isReadOnly: boolean;
+  /** Institutions a subaward_admin may access; empty for other roles */
+  permittedInstitutions: string[];
   refetch: () => void;
   logout: () => Promise<void>;
 }
@@ -19,7 +23,10 @@ const AuthContext = createContext<AuthContextType>({
   isLoading: true,
   isAuthenticated: false,
   isAdmin: false,
+  isGrantAdmin: false,
+  isSubawardAdmin: false,
   isReadOnly: false,
+  permittedInstitutions: [],
   refetch: () => {},
   logout: async () => {},
 });
@@ -57,7 +64,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const isAuthenticated = !!session?.user;
   const isAdmin = session?.role === 'admin';
+  const isGrantAdmin = session?.role === 'grant_admin';
+  const isSubawardAdmin = session?.role === 'subaward_admin';
   const isReadOnly = session?.role === 'read_only';
+  const permittedInstitutions = session?.institutions ?? [];
 
   return (
     <AuthContext.Provider
@@ -66,7 +76,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         isLoading,
         isAuthenticated,
         isAdmin,
+        isGrantAdmin,
+        isSubawardAdmin,
         isReadOnly,
+        permittedInstitutions,
         refetch: () => refetch(),
         logout,
       }}

@@ -1,18 +1,40 @@
 'use client';
 
-import { useState, useEffect } from 'react';
-import { useRouter } from 'next/navigation';
+import { Suspense, useState, useEffect } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { api, AuthMode } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
 
+const ERROR_MESSAGES: Record<string, string> = {
+  no_account: 'No account found for this identity. Please contact an administrator for an invite link.',
+  invalid_invite: 'This invite link is invalid or has expired. Please request a new one from an administrator.',
+  identity_already_linked: 'This identity is already linked to another account. If you believe this is an error, contact an administrator.',
+};
+
 export default function LoginPage() {
+  return (
+    <Suspense fallback={<div className="flex items-center justify-center min-h-screen bg-gray-50"><div className="text-gray-500">Loading...</div></div>}>
+      <LoginContent />
+    </Suspense>
+  );
+}
+
+function LoginContent() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const { isAuthenticated, isLoading: authLoading, refetch } = useAuth();
   const [mode, setMode] = useState<AuthMode | null>(null);
   const [loading, setLoading] = useState(true);
   const [devName, setDevName] = useState('Developer');
   const [devRole, setDevRole] = useState('admin');
   const [error, setError] = useState('');
+
+  useEffect(() => {
+    const errCode = searchParams.get('error');
+    if (errCode) {
+      setError(ERROR_MESSAGES[errCode] || `Login error: ${errCode}`);
+    }
+  }, [searchParams]);
 
   useEffect(() => {
     api.auth.mode().then(setMode).catch(() => setMode({ mode: 'dev', oidc_configured: false, callback_url: '' })).finally(() => setLoading(false));

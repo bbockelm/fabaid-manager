@@ -9,10 +9,12 @@ const navItems = [
   { label: 'WBS Areas', href: '/wbs', icon: '🗂️' },
   { label: 'Personnel', href: '/personnel', icon: '👥' },
   { label: 'Institutions', href: '/institutions', icon: '🏛️' },
-  { label: 'Budget', href: '/budget', icon: '💰' },
+  { label: 'Budget Overview', href: '/budget-overview', icon: '📈' },
+  { label: 'Detailed Budget', href: '/budget', icon: '💰' },
   { label: 'Documents', href: '/documents', icon: '📄' },
-  { label: 'Settings', href: '/settings', icon: '⚙️' },
-  { label: 'Backup', href: '/backup', icon: '💾' },
+  { label: 'Statements of Work', href: '/sow', icon: '📋' },
+  { label: 'Settings', href: '/settings', icon: '⚙️', hideForSubawardAdmin: true },
+  { label: 'Backup', href: '/backup', icon: '💾', hideForSubawardAdmin: true },
 ];
 
 const adminNavItems = [
@@ -22,7 +24,11 @@ const adminNavItems = [
 
 export function Sidebar() {
   const pathname = usePathname();
-  const { session, isAuthenticated, isAdmin, logout } = useAuth();
+  const { session, isAuthenticated, isAdmin, isGrantAdmin, isSubawardAdmin, logout } = useAuth();
+
+  const visibleNavItems = navItems.filter(
+    (item) => !item.hideForSubawardAdmin || !isSubawardAdmin
+  );
 
   const roleLabel = session?.role?.replace('_', ' ') ?? '';
   const roleBadgeColor =
@@ -30,6 +36,8 @@ export function Sidebar() {
       ? 'bg-red-400/30 text-red-100'
       : session?.role === 'grant_admin'
       ? 'bg-blue-400/30 text-blue-100'
+      : session?.role === 'subaward_admin'
+      ? 'bg-amber-400/30 text-amber-100'
       : 'bg-gray-400/30 text-gray-200';
 
   return (
@@ -39,7 +47,7 @@ export function Sidebar() {
         <p className="text-xs text-blue-200 mt-1">FabAID</p>
       </div>
       <nav className="flex-1 p-4 space-y-1">
-        {navItems.map((item) => {
+        {visibleNavItems.map((item) => {
           const isActive =
             pathname === item.href ||
             (item.href !== '/' && pathname.startsWith(item.href));
@@ -59,7 +67,7 @@ export function Sidebar() {
           );
         })}
 
-        {isAdmin && (
+        {(isAdmin || isGrantAdmin) && (
           <>
             <div className="pt-4 pb-1">
               <span className="text-xs font-semibold text-blue-300 uppercase tracking-wider px-3">

@@ -7,7 +7,13 @@ import { useAuth } from '@/lib/auth-context';
 
 function getCookie(name: string): string | null {
   const match = document.cookie.match(new RegExp('(^| )' + name + '=([^;]+)'));
-  return match ? decodeURIComponent(match[2]) : null;
+  if (!match) return null;
+  let val = decodeURIComponent(match[2]);
+  // Go's http.SetCookie wraps values containing spaces in double quotes
+  if (val.length >= 2 && val.startsWith('"') && val.endsWith('"')) {
+    val = val.slice(1, -1);
+  }
+  return val;
 }
 
 function clearCookie(name: string) {

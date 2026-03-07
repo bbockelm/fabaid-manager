@@ -1,13 +1,36 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useMemo, useCallback } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api, UserInfo, InviteInfo } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
+import { useGrant } from '@/lib/grant-context';
 import { useRouter } from 'next/navigation';
 
+function CopyButton({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false);
+  const handleCopy = useCallback(() => {
+    navigator.clipboard.writeText(text);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  }, [text]);
+  return (
+    <button
+      onClick={handleCopy}
+      className={`px-2 py-1 border rounded text-xs transition-colors ${
+        copied
+          ? 'bg-green-100 border-green-300 text-green-700'
+          : 'bg-white hover:bg-gray-50'
+      }`}
+    >
+      {copied ? '✓ Copied' : 'Copy'}
+    </button>
+  );
+}
+
 export default function AdminUsersPage() {
-  const { isAdmin, isLoading: authLoading } = useAuth();
+  const { isAdmin, isGrantAdmin, isLoading: authLoading } = useAuth();
+  const { grant, grantId } = useGrant();
   const router = useRouter();
   const queryClient = useQueryClient();
 
@@ -20,8 +43,22 @@ export default function AdminUsersPage() {
   const { data: users, isLoading } = useQuery({
     queryKey: ['admin', 'users'],
     queryFn: api.admin.listUsers,
-    enabled: isAdmin,
+    enabled: isAdmin || isGrantAdmin,
   });
+
+  const { data: subawards } = useQuery({
+    queryKey: ['subawards', grantId],
+    queryFn: () => api.subawards.list(grantId!),
+    enabled: !!(grantId && (isAdmin || isGrantAdmin)),
+  });
+
+  // Build the list of all known institutions (lead + subawards)
+  const allInstitutions = useMemo(() => {
+    const set = new Set<string>();
+    if (grant?.institution) set.add(grant.institution);
+    subawards?.forEach((s) => { if (s.institution) set.add(s.institution); });
+    return Array.from(set).sort();
+  }, [grant, subawards]);
 
   const createUserMut = useMutation({
     mutationFn: () => api.admin.createUser(newUserName, newUserRole),
@@ -71,11 +108,11 @@ export default function AdminUsersPage() {
     return <div className="p-6 text-gray-500">Loading...</div>;
   }
 
-  if (!isAdmin) {
+  if (!isAdmin && !isGrantAdmin) {
     return (
       <div className="p-6">
         <div className="p-4 text-red-700 bg-red-50 rounded-md">
-          Access denied. Admin role required.
+          Access denied. Admin or Grant Admin role required.
         </div>
       </div>
     );
@@ -118,6 +155,7 @@ export default function AdminUsersPage() {
             >
               <option value="admin">Admin</option>
               <option value="grant_admin">Grant Admin</option>
+              <option value="subaward_admin">Subaward Admin</option>
               <option value="read_only">Read Only</option>
             </select>
             <button
@@ -136,6 +174,7 @@ export default function AdminUsersPage() {
           <UserCard
             key={user.id}
             user={user}
+            allInstitutions={allInstitutions}
             isExpanded={expandedUser === user.id}
             onToggle={() => setExpandedUser(expandedUser === user.id ? null : user.id)}
             onDeleteUser={() => {
@@ -166,6 +205,7 @@ export default function AdminUsersPage() {
 
 function UserCard({
   user,
+  allInstitutions,
   isExpanded,
   onToggle,
   onDeleteUser,
@@ -175,6 +215,7 @@ function UserCard({
   onToggleStatus,
 }: {
   user: UserInfo;
+  allInstitutions: string[];
   isExpanded: boolean;
   onToggle: () => void;
   onDeleteUser: () => void;
@@ -183,7 +224,26 @@ function UserCard({
   onRemoveIdentity: (identityId: string) => void;
   onToggleStatus: () => void;
 }) {
-  const allRoles = ['admin', 'grant_admin', 'read_only'];
+  const queryClient = useQueryClient();
+
+  // Institutions not yet assigned to this user
+  const availableInstitutions = allInstitutions.filter(
+    (inst) => !(user.institutions ?? []).includes(inst)
+  );
+
+  const addInstitutionMut = useMutation({
+    mutationFn: (institution: string) => api.admin.addUserInstitution(user.id, institution),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['admin', 'users'] });
+    },
+  });
+
+  const removeInstitutionMut = useMutation({
+    mutationFn: (institution: string) => api.admin.removeUserInstitution(user.id, institution),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['admin', 'users'] }),
+  });
+
+  const allRoles = ['admin', 'grant_admin', 'subaward_admin', 'read_only'];
   const userRoles = user.roles ?? [];
   const missingRoles = allRoles.filter((r) => !userRoles.includes(r));
 
@@ -208,6 +268,8 @@ function UserCard({
                       ? 'bg-red-100 text-red-700'
                       : role === 'grant_admin'
                       ? 'bg-blue-100 text-blue-700'
+                      : role === 'subaward_admin'
+                      ? 'bg-amber-100 text-amber-700'
                       : 'bg-gray-100 text-gray-600'
                   }`}
                 >
@@ -287,10 +349,21 @@ function UserCard({
                     key={id.id}
                     className="flex items-center justify-between text-xs bg-white border rounded px-3 py-2"
                   >
-                    <div>
-                      <span className="text-gray-500">{id.issuer}</span>
-                      <span className="mx-1 text-gray-300">|</span>
-                      <span className="text-gray-700">{id.subject}</span>
+                    <div className="min-w-0 flex-1">
+                      <div>
+                        <span className="text-gray-500">{id.issuer}</span>
+                        <span className="mx-1 text-gray-300">|</span>
+                        <span className="text-gray-700">{id.subject}</span>
+                      </div>
+                      {(id.email || id.eppn || id.cilogon_id || id.display_name || id.idp_name) && (
+                        <div className="mt-1 text-gray-400 space-x-3">
+                          {id.display_name && <span title="Display name">{id.display_name}</span>}
+                          {id.email && <span title="Email">✉ {id.email}</span>}
+                          {id.eppn && <span title="ePPN">ePPN: {id.eppn}</span>}
+                          {id.idp_name && <span title="Identity Provider">IdP: {id.idp_name}</span>}
+                          {id.cilogon_id && <span title="CILogon ID">CILogon: {id.cilogon_id}</span>}
+                        </div>
+                      )}
                     </div>
                     <button
                       onClick={(e) => {
@@ -308,6 +381,66 @@ function UserCard({
               <div className="text-xs text-gray-400">No linked identities</div>
             )}
           </div>
+
+          {/* Institution Access (relevant for subaward_admin users) */}
+          {userRoles.includes('subaward_admin') && (
+            <div>
+              <h4 className="text-xs font-semibold text-gray-500 uppercase mb-2">
+                Permitted Institutions
+              </h4>
+              {user.institutions && user.institutions.length > 0 ? (
+                <div className="space-y-1 mb-2">
+                  {user.institutions.map((inst) => (
+                    <div
+                      key={inst}
+                      className="flex items-center justify-between text-xs bg-white border rounded px-3 py-2"
+                    >
+                      <span className="text-gray-700">{inst}</span>
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          if (confirm(`Remove access to "${inst}"?`)) removeInstitutionMut.mutate(inst);
+                        }}
+                        className="text-red-400 hover:text-red-600"
+                      >
+                        ×
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="text-xs text-amber-600 mb-2">
+                  No institutions assigned — this user cannot access any data yet.
+                </div>
+              )}
+              <div className="flex gap-2">
+                {availableInstitutions.length > 0 ? (
+                  <select
+                    onChange={(e) => {
+                      if (e.target.value) {
+                        addInstitutionMut.mutate(e.target.value);
+                        e.target.value = '';
+                      }
+                    }}
+                    defaultValue=""
+                    disabled={addInstitutionMut.isPending}
+                    className="flex-1 text-xs border rounded px-2 py-1 bg-white"
+                  >
+                    <option value="">+ Add institution...</option>
+                    {availableInstitutions.map((inst) => (
+                      <option key={inst} value={inst}>{inst}</option>
+                    ))}
+                  </select>
+                ) : (
+                  <span className="text-xs text-gray-400">
+                    {allInstitutions.length === 0
+                      ? 'No institutions configured in the project yet.'
+                      : 'All institutions already assigned.'}
+                  </span>
+                )}
+              </div>
+            </div>
+          )}
 
           {/* Invites */}
           <InviteSection userId={user.id} />
@@ -381,7 +514,7 @@ function InviteSection({ userId }: { userId: string }) {
             >
               <div>
                 <span className={`${inv.used ? 'text-gray-400 line-through' : 'text-gray-700'}`}>
-                  {inv.role.replace('_', ' ')}
+                  Invite link
                 </span>
                 <span className="text-gray-400 ml-2">
                   expires {new Date(inv.expires_at).toLocaleDateString()}
@@ -422,14 +555,7 @@ function InviteSection({ userId }: { userId: string }) {
               value={generatedUrl}
               className="flex-1 bg-white border rounded px-2 py-1 text-xs"
             />
-            <button
-              onClick={() => {
-                navigator.clipboard.writeText(generatedUrl);
-              }}
-              className="px-2 py-1 bg-white border rounded hover:bg-gray-50 text-xs"
-            >
-              Copy
-            </button>
+            <CopyButton text={generatedUrl} />
           </div>
         </div>
       )}

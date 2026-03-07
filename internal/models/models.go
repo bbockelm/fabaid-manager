@@ -74,10 +74,12 @@ type Personnel struct {
 
 // PersonnelBudgetEntry is a budget summary for one person in one year at one institution.
 type PersonnelBudgetEntry struct {
-	Institution  string  `json:"institution"`
-	FiscalYear   int     `json:"fiscal_year"`
-	EffortMonths float64 `json:"effort_months"`
-	Amount       float64 `json:"amount"`
+	Institution          string  `json:"institution"`
+	FiscalYear           int     `json:"fiscal_year"`
+	EffortMonths         float64 `json:"effort_months"`
+	SalaryAmount         float64 `json:"salary_amount"`
+	FringeAmount         float64 `json:"fringe_amount"`
+	SalaryEscalationRate float64 `json:"salary_escalation_rate"`
 }
 
 // BudgetLineItem represents a cost line in an institution budget.
@@ -161,17 +163,53 @@ type Document struct {
 
 // StatementOfWork represents an annual statement of work for a subaward.
 type StatementOfWork struct {
-	ID           string    `json:"id"`
-	SubawardID   string    `json:"subaward_id"`
-	FiscalYear   int       `json:"fiscal_year"`
-	PeriodStart  string    `json:"period_start"`
-	PeriodEnd    string    `json:"period_end"`
-	BudgetAmount float64   `json:"budget_amount"`
-	ScopeText    string    `json:"scope_text,omitempty"`
-	Status       string    `json:"status"`
-	SignedDocID  *string   `json:"signed_doc_id,omitempty"`
-	CreatedAt    time.Time `json:"created_at"`
-	UpdatedAt    time.Time `json:"updated_at"`
+	ID          string    `json:"id"`
+	SubawardID  string    `json:"subaward_id"`
+	FiscalYear  int       `json:"fiscal_year"`
+	PeriodStart string    `json:"period_start"`
+	PeriodEnd   string    `json:"period_end"`
+	BudgetID    *string   `json:"budget_id,omitempty"`
+	ScopeText   string    `json:"scope_text,omitempty"`
+	Status      string    `json:"status"`
+	SignedDocID *string   `json:"signed_doc_id,omitempty"`
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
+}
+
+// SOWConfig holds per-grant template settings for generating SOW documents.
+type SOWConfig struct {
+	ID                  string    `json:"id"`
+	GrantID             string    `json:"grant_id"`
+	HeaderTitle         string    `json:"header_title"`
+	HeaderSubtitle      string    `json:"header_subtitle"`
+	ProjectName         string    `json:"project_name"`
+	IntroTemplate       string    `json:"intro_template"`
+	CostsTemplate       string    `json:"costs_template"`
+	ConcurrenceSigners  string    `json:"concurrence_signers"` // JSON array
+	CreatedAt           time.Time `json:"created_at"`
+	UpdatedAt           time.Time `json:"updated_at"`
+}
+
+// SOWPersonnelDescription is free-form markdown for what a person does in a SOW.
+type SOWPersonnelDescription struct {
+	ID            string    `json:"id"`
+	SOWID         string    `json:"sow_id"`
+	PersonnelID   string    `json:"personnel_id"`
+	DescriptionMD string    `json:"description_md"`
+	SortOrder     int       `json:"sort_order"`
+	CreatedAt     time.Time `json:"created_at"`
+	UpdatedAt     time.Time `json:"updated_at"`
+}
+
+// SOWLineItemDescription is free-form markdown for an atypical line item in a SOW.
+type SOWLineItemDescription struct {
+	ID            string    `json:"id"`
+	SOWID         string    `json:"sow_id"`
+	LineItemID    string    `json:"line_item_id"`
+	DescriptionMD string    `json:"description_md"`
+	SortOrder     int       `json:"sort_order"`
+	CreatedAt     time.Time `json:"created_at"`
+	UpdatedAt     time.Time `json:"updated_at"`
 }
 
 // BudgetDocument represents an encrypted budget or budget justification PDF.
@@ -258,6 +296,7 @@ type UserIdentity struct {
 	EPPN        string    `json:"eppn,omitempty"`
 	OIDC        string    `json:"oidc,omitempty"`
 	CILogonID   string    `json:"cilogon_id,omitempty"`
+	IdPName     string    `json:"idp_name,omitempty"`
 	DisplayName string    `json:"display_name,omitempty"`
 	CreatedAt   time.Time `json:"created_at"`
 }
@@ -267,6 +306,7 @@ type Session struct {
 	ID        string    `json:"id"`
 	UserID    string    `json:"user_id"`
 	Role      string    `json:"role"`
+	TokenHash []byte    `json:"-"` // SHA-256 hash of raw session token; never serialized
 	ExpiresAt time.Time `json:"expires_at"`
 	CreatedAt time.Time `json:"created_at"`
 }
@@ -274,9 +314,9 @@ type Session struct {
 // Invite represents a single-use invite link.
 type Invite struct {
 	ID        string    `json:"id"`
-	Token     string    `json:"token"`
+	Token     string    `json:"token,omitempty"` // only populated transiently at creation; never stored in DB
+	TokenHash []byte    `json:"-"`               // SHA-256 hash of the raw invite token
 	UserID    string    `json:"user_id"`
-	Role      string    `json:"role"`
 	Used      bool      `json:"used"`
 	ExpiresAt time.Time `json:"expires_at"`
 	CreatedAt time.Time `json:"created_at"`
@@ -291,10 +331,11 @@ type AppConfig struct {
 
 // SessionInfo is the response for /auth/me with user + session details.
 type SessionInfo struct {
-	User       *User    `json:"user"`
-	Role       string   `json:"role"`
-	Roles      []string `json:"roles"`
-	IsDevLogin bool     `json:"is_dev_login"`
+	User         *User    `json:"user"`
+	Role         string   `json:"role"`
+	Roles        []string `json:"roles"`
+	Institutions []string `json:"institutions,omitempty"` // for subaward_admin: permitted institutions
+	IsDevLogin   bool     `json:"is_dev_login"`
 }
 
 // APIKey represents a long-lived API key for programmatic access.
@@ -347,6 +388,14 @@ type ObjectHash struct {
 	UpdatedAt time.Time `json:"updated_at"`
 }
 
+// UserInstitutionAccess maps a subaward_admin user to an institution they manage.
+type UserInstitutionAccess struct {
+	ID          string    `json:"id"`
+	UserID      string    `json:"user_id"`
+	Institution string    `json:"institution"`
+	CreatedAt   time.Time `json:"created_at"`
+}
+
 // BackupSettings holds admin-configurable backup parameters.
 type BackupSettings struct {
 	BackupFrequencyHours int    `json:"backup_frequency_hours"` // 0 = disabled
@@ -355,4 +404,77 @@ type BackupSettings struct {
 	BackupAccessKey      string `json:"backup_access_key"`      // empty = use default creds
 	BackupSecretKey      string `json:"backup_secret_key"`      // empty = use default creds
 	BackupUseSSL         bool   `json:"backup_use_ssl"`
+}
+
+// --- Budget Overview ---
+
+// BudgetOverviewResponse is the overall project budget overview.
+type BudgetOverviewResponse struct {
+	Institutions   []*BudgetOverviewInstitution `json:"institutions"`
+	WBSAreas       []*BudgetOverviewWBS         `json:"wbs_areas"`
+	YearlyTotals   map[int]float64              `json:"yearly_totals"`
+	YearlyDirect   map[int]float64              `json:"yearly_direct"`
+	YearlyIndirect map[int]float64              `json:"yearly_indirect"`
+	GrandTotal     float64                      `json:"grand_total"`
+	GrandDirect    float64                      `json:"grand_direct"`
+	GrandIndirect  float64                      `json:"grand_indirect"`
+	AwardTotal     float64                      `json:"award_total"`
+}
+
+// BudgetOverviewInstitution is an institution's budget summary in the overview.
+type BudgetOverviewInstitution struct {
+	EntityType    string                      `json:"entity_type"`
+	EntityID      string                      `json:"entity_id"`
+	Name          string                      `json:"name"`
+	IsLead        bool                        `json:"is_lead"`
+	Years         map[int]*BudgetOverviewYear `json:"years"`
+	Total         float64                     `json:"total"`
+	DirectTotal   float64                     `json:"direct_total"`
+	IndirectTotal float64                     `json:"indirect_total"`
+}
+
+// BudgetOverviewYear is budget totals for one institution-year.
+type BudgetOverviewYear struct {
+	BudgetID      string             `json:"budget_id"`
+	Status        string             `json:"status"`
+	Total         float64            `json:"total"`
+	DirectCosts   float64            `json:"direct_costs"`
+	IndirectCosts float64            `json:"indirect_costs"`
+	ByCategory    map[string]float64 `json:"by_category"`
+}
+
+// BudgetOverviewWBS is a WBS area's budget summary in the overview.
+type BudgetOverviewWBS struct {
+	WBSAreaID *string         `json:"wbs_area_id"`
+	Code      string          `json:"code"`
+	Name      string          `json:"name"`
+	Years     map[int]float64 `json:"years"`
+	Total     float64         `json:"total"`
+}
+
+// BudgetInstitutionRow is a raw row from the budget-by-institution query.
+type BudgetInstitutionRow struct {
+	EntityType string
+	EntityID   string
+	FiscalYear int
+	BudgetID   string
+	Status     string
+	LineType   string
+	Amount     float64
+}
+
+// BudgetWBSRow is a raw row from the budget-by-WBS query.
+type BudgetWBSRow struct {
+	FiscalYear int
+	WBSAreaID  *string
+	Amount     float64
+}
+
+// OverheadBaseRow is the F&A base amount for a single entity/year/rate from the overhead bases query.
+type OverheadBaseRow struct {
+	EntityType     string
+	EntityID       string
+	FiscalYear     int
+	OverheadRateID string
+	BaseAmount     float64
 }

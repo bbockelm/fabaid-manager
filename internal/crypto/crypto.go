@@ -21,6 +21,7 @@ import (
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -33,7 +34,8 @@ import (
 
 // Encryptor performs envelope encryption for documents.
 type Encryptor struct {
-	kek []byte // key-encryption key, derived from master key via HKDF
+	kek       []byte // key-encryption key for documents, derived from master key via HKDF
+	configKEK []byte // key-encryption key for app_config secrets
 }
 
 // NewEncryptor creates an Encryptor from a hex-encoded master key.
@@ -41,7 +43,7 @@ type Encryptor struct {
 // The info parameter scopes the derived KEK (e.g. "fabaid-budget-docs").
 func NewEncryptor(masterKeyHex string) (*Encryptor, error) {
 	if masterKeyHex == "" {
-		return nil, errors.New("DOCUMENT_MASTER_KEY is required")
+		return nil, errors.New("INSTANCE_KEY is required")
 	}
 	masterKey, err := hex.DecodeString(masterKeyHex)
 	if err != nil {
@@ -59,7 +61,14 @@ func NewEncryptor(masterKeyHex string) (*Encryptor, error) {
 		return nil, fmt.Errorf("deriving KEK: %w", err)
 	}
 
-	return &Encryptor{kek: kek}, nil
+	// Derive a separate KEK for encrypting configuration secrets
+	configReader := hkdf.New(sha256.New, masterKey, nil, []byte("fabaid-config-kek"))
+	configKEK := make([]byte, 32)
+	if _, err := io.ReadFull(configReader, configKEK); err != nil {
+		return nil, fmt.Errorf("deriving config KEK: %w", err)
+	}
+
+	return &Encryptor{kek: kek, configKEK: configKEK}, nil
 }
 
 // GenerateDEK creates a random 256-bit data encryption key.
@@ -154,6 +163,67 @@ func Decrypt(dek, ciphertext []byte) ([]byte, error) {
 		return nil, fmt.Errorf("decrypting data: %w", err)
 	}
 	return plaintext, nil
+}
+
+// --- Config value encryption ---
+// Uses a separate KEK derived from the same master key so that config secrets
+// are domain-separated from document DEKs.
+
+const configEncPrefix = "enc:v1:"
+
+// EncryptConfigValue encrypts a plaintext string for storage in app_config.
+// Returns a self-describing string: "enc:v1:<base64(nonce|ciphertext)>".
+func (e *Encryptor) EncryptConfigValue(plaintext string) (string, error) {
+	block, err := aes.NewCipher(e.configKEK)
+	if err != nil {
+		return "", fmt.Errorf("creating config cipher: %w", err)
+	}
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return "", fmt.Errorf("creating config GCM: %w", err)
+	}
+	nonce := make([]byte, gcm.NonceSize())
+	if _, err := rand.Read(nonce); err != nil {
+		return "", fmt.Errorf("generating config nonce: %w", err)
+	}
+	ct := gcm.Seal(nonce, nonce, []byte(plaintext), nil) // nonce || ciphertext
+	return configEncPrefix + base64.StdEncoding.EncodeToString(ct), nil
+}
+
+// DecryptConfigValue decrypts a value produced by EncryptConfigValue.
+// If the value does not have the "enc:v1:" prefix it is returned as-is
+// (legacy plaintext).
+func (e *Encryptor) DecryptConfigValue(stored string) (string, error) {
+	if !IsEncryptedConfig(stored) {
+		return stored, nil // legacy plaintext — transparently pass through
+	}
+	raw, err := base64.StdEncoding.DecodeString(stored[len(configEncPrefix):])
+	if err != nil {
+		return "", fmt.Errorf("decoding config ciphertext: %w", err)
+	}
+	block, err := aes.NewCipher(e.configKEK)
+	if err != nil {
+		return "", fmt.Errorf("creating config cipher: %w", err)
+	}
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return "", fmt.Errorf("creating config GCM: %w", err)
+	}
+	nonceSize := gcm.NonceSize()
+	if len(raw) < nonceSize {
+		return "", errors.New("encrypted config value too short")
+	}
+	nonce, ct := raw[:nonceSize], raw[nonceSize:]
+	pt, err := gcm.Open(nil, nonce, ct, nil)
+	if err != nil {
+		return "", fmt.Errorf("decrypting config value (wrong master key?): %w", err)
+	}
+	return string(pt), nil
+}
+
+// IsEncryptedConfig returns true if the value string has the encryption prefix.
+func IsEncryptedConfig(val string) bool {
+	return len(val) > len(configEncPrefix) && val[:len(configEncPrefix)] == configEncPrefix
 }
 
 // --- Backup key hierarchy ---

@@ -42,6 +42,10 @@ func main() {
 	if err := cfg.EnsureMasterKey(); err != nil {
 		log.Fatal().Err(err).Msg("Failed to ensure document master key")
 	}
+	// Derive the session HMAC secret from the master key.
+	if err := cfg.DeriveSessionSecret(); err != nil {
+		log.Fatal().Err(err).Msg("Failed to derive session secret")
+	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -69,9 +73,9 @@ func main() {
 
 	// Initialize document encryption + backup service
 	var enc *crypto.Encryptor
-	if cfg.DocumentMasterKey != "" {
+	if cfg.InstanceKey != "" {
 		var err error
-		enc, err = crypto.NewEncryptor(cfg.DocumentMasterKey)
+		enc, err = crypto.NewEncryptor(cfg.InstanceKey)
 		if err != nil {
 			log.Fatal().Err(err).Msg("Failed to initialize document encryption")
 		}

@@ -15,27 +15,51 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/rs/zerolog/log"
 
 	"github.com/bbockelm/fabaid-manager/internal/models"
 )
 
 const (
-	sessionCookieName = "fabaid_session"
-	sessionDuration   = 7 * 24 * time.Hour
-	inviteExpiry      = 7 * 24 * time.Hour
-	RoleAdmin         = "admin"
-	RoleGrantAdmin    = "grant_admin"
-	RoleReadOnly      = "read_only"
+	sessionCookieName  = "fabaid_session"
+	sessionDuration    = 7 * 24 * time.Hour
+	inviteExpiry       = 7 * 24 * time.Hour
+	RoleAdmin          = "admin"
+	RoleGrantAdmin     = "grant_admin"
+	RoleSubawardAdmin  = "subaward_admin"
+	RoleReadOnly       = "read_only"
+	sessionTokenBytes  = 32 // 256 bits of entropy for session/invite tokens
 )
 
 var validRoles = map[string]bool{
-	RoleAdmin:      true,
-	RoleGrantAdmin: true,
-	RoleReadOnly:   true,
+	RoleAdmin:         true,
+	RoleGrantAdmin:    true,
+	RoleSubawardAdmin: true,
+	RoleReadOnly:      true,
 }
 
 type contextKey string
+
+// hashToken computes SHA-256 of a raw token string.
+// SHA-256 is appropriate here (not bcrypt) because the input has 256 bits
+// of cryptographic randomness — there is nothing to brute-force.
+func hashToken(token string) []byte {
+	h := sha256.Sum256([]byte(token))
+	return h[:]
+}
+
+// generateToken creates a cryptographically random token and its SHA-256 hash.
+// The raw token is URL-safe base64 (no padding); the hash is stored in the DB.
+func generateToken() (rawToken string, tokenHash []byte, err error) {
+	buf := make([]byte, sessionTokenBytes)
+	if _, err = rand.Read(buf); err != nil {
+		return "", nil, fmt.Errorf("generating random token: %w", err)
+	}
+	rawToken = base64.RawURLEncoding.EncodeToString(buf)
+	tokenHash = hashToken(rawToken)
+	return rawToken, tokenHash, nil
+}
 
 const sessionContextKey contextKey = "session"
 const userContextKey contextKey = "user"
@@ -63,7 +87,7 @@ func (h *Handler) RequireAuth(next http.Handler) http.Handler {
 			return
 		}
 
-		session, err := h.queries.GetSession(r.Context(), cookie.Value)
+		session, err := h.queries.GetSession(r.Context(), hashToken(cookie.Value))
 		if err != nil {
 			http.SetCookie(w, &http.Cookie{
 				Name: sessionCookieName, Value: "", Path: "/",
@@ -103,6 +127,25 @@ func RequireRole(allowed ...string) func(http.Handler) http.Handler {
 	}
 }
 
+// effectiveRole returns the highest-priority role from a list of UserRoles.
+// Priority: admin > grant_admin > subaward_admin > read_only
+func effectiveRole(roles []models.UserRole) string {
+	best := RoleReadOnly
+	for _, ur := range roles {
+		switch ur.Role {
+		case RoleAdmin:
+			return RoleAdmin
+		case RoleGrantAdmin:
+			best = RoleGrantAdmin
+		case RoleSubawardAdmin:
+			if best == RoleReadOnly {
+				best = RoleSubawardAdmin
+			}
+		}
+	}
+	return best
+}
+
 // RequireWriteAccess blocks read_only users from mutating endpoints.
 func RequireWriteAccess(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -128,7 +171,7 @@ func (h *Handler) GetCurrentSession(w http.ResponseWriter, r *http.Request) {
 		respondJSON(w, http.StatusOK, models.SessionInfo{})
 		return
 	}
-	session, err := h.queries.GetSession(r.Context(), cookie.Value)
+	session, err := h.queries.GetSession(r.Context(), hashToken(cookie.Value))
 	if err != nil {
 		respondJSON(w, http.StatusOK, models.SessionInfo{})
 		return
@@ -139,18 +182,30 @@ func (h *Handler) GetCurrentSession(w http.ResponseWriter, r *http.Request) {
 	for i, rl := range roles {
 		roleStrs[i] = rl.Role
 	}
-	respondJSON(w, http.StatusOK, models.SessionInfo{
+	info := models.SessionInfo{
 		User:  user,
 		Role:  session.Role,
 		Roles: roleStrs,
-	})
+	}
+	// If the user has subaward_admin role, include their permitted institutions
+	for _, rs := range roleStrs {
+		if rs == RoleSubawardAdmin {
+			insts, _ := h.queries.ListUserInstitutionNames(r.Context(), session.UserID)
+			if insts == nil {
+				insts = []string{}
+			}
+			info.Institutions = insts
+			break
+		}
+	}
+	respondJSON(w, http.StatusOK, info)
 }
 
 // Logout destroys the current session.
 func (h *Handler) Logout(w http.ResponseWriter, r *http.Request) {
 	cookie, err := r.Cookie(sessionCookieName)
 	if err == nil && cookie.Value != "" {
-		_ = h.queries.DeleteSession(r.Context(), cookie.Value)
+		_ = h.queries.DeleteSession(r.Context(), hashToken(cookie.Value))
 	}
 	http.SetCookie(w, &http.Cookie{
 		Name: sessionCookieName, Value: "", Path: "/",
@@ -192,6 +247,7 @@ func (h *Handler) DevLogin(w http.ResponseWriter, r *http.Request) {
 		// Create a new dev user
 		user := &models.User{DisplayName: req.DisplayName, Status: "active"}
 		if err := h.queries.CreateUser(r.Context(), user); err != nil {
+			log.Error().Err(err).Msg("Failed to create dev user")
 			respondError(w, http.StatusInternalServerError, "Failed to create dev user")
 			return
 		}
@@ -214,19 +270,27 @@ func (h *Handler) DevLogin(w http.ResponseWriter, r *http.Request) {
 	// Delete any existing sessions for this user
 	_ = h.queries.DeleteUserSessions(r.Context(), userID)
 
-	// Create session
+	// Create session with hashed token
+	rawToken, tokenHash, genErr := generateToken()
+	if genErr != nil {
+		log.Error().Err(err).Msg("Failed to generate session token")
+		respondError(w, http.StatusInternalServerError, "Failed to generate session token")
+		return
+	}
 	session := &models.Session{
 		UserID:    userID,
 		Role:      req.Role,
+		TokenHash: tokenHash,
 		ExpiresAt: time.Now().Add(sessionDuration),
 	}
 	if err := h.queries.CreateSession(r.Context(), session); err != nil {
+		log.Error().Err(err).Msg("Failed to create session")
 		respondError(w, http.StatusInternalServerError, "Failed to create session")
 		return
 	}
 
 	http.SetCookie(w, &http.Cookie{
-		Name: sessionCookieName, Value: session.ID, Path: "/",
+		Name: sessionCookieName, Value: rawToken, Path: "/",
 		MaxAge: int(sessionDuration.Seconds()), HttpOnly: true, SameSite: http.SameSiteLaxMode,
 	})
 	respondJSON(w, http.StatusOK, map[string]any{
@@ -264,7 +328,7 @@ func (h *Handler) GetAuthMode(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) getOIDCConfig(ctx context.Context) (issuer, clientID, clientSecret string, err error) {
 	issuer, _ = h.queries.GetAppConfig(ctx, "oidc_issuer")
 	clientID, _ = h.queries.GetAppConfig(ctx, "oidc_client_id")
-	clientSecret, _ = h.queries.GetAppConfig(ctx, "oidc_client_secret")
+	clientSecret, _ = h.getDecryptedConfig(ctx, "oidc_client_secret")
 	if issuer != "" && clientID != "" {
 		return
 	}
@@ -275,6 +339,30 @@ func (h *Handler) getOIDCConfig(ctx context.Context) (issuer, clientID, clientSe
 		err = fmt.Errorf("OIDC not configured")
 	}
 	return
+}
+
+// getDecryptedConfig reads a config value and decrypts it if the encryptor is available.
+func (h *Handler) getDecryptedConfig(ctx context.Context, key string) (string, error) {
+	val, err := h.queries.GetAppConfig(ctx, key)
+	if err != nil {
+		return "", err
+	}
+	if h.encryptor != nil {
+		return h.encryptor.DecryptConfigValue(val)
+	}
+	return val, nil
+}
+
+// setEncryptedConfig encrypts a config value before storing it.
+func (h *Handler) setEncryptedConfig(ctx context.Context, key, plaintext string) error {
+	if h.encryptor != nil && plaintext != "" {
+		encrypted, err := h.encryptor.EncryptConfigValue(plaintext)
+		if err != nil {
+			return fmt.Errorf("encrypting config %s: %w", key, err)
+		}
+		return h.queries.SetAppConfig(ctx, key, encrypted)
+	}
+	return h.queries.SetAppConfig(ctx, key, plaintext)
 }
 
 // OIDCLogin initiates the OIDC authorization code flow.
@@ -367,6 +455,7 @@ func (h *Handler) OIDCCallback(w http.ResponseWriter, r *http.Request) {
 
 	issuer, clientID, clientSecret, err := h.getOIDCConfig(r.Context())
 	if err != nil {
+		log.Error().Err(err).Msg("OIDC not configured")
 		respondError(w, http.StatusInternalServerError, "OIDC not configured")
 		return
 	}
@@ -423,7 +512,7 @@ func (h *Handler) OIDCCallback(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Extract CILogon-specific claims
-	var cilogonID, eppn, oidcClaim string
+	var cilogonID, eppn, oidcClaim, idpName string
 	if strings.Contains(issuer, "cilogon.org") && userinfoData != nil {
 		if v, ok := userinfoData["id"].(string); ok {
 			cilogonID = v
@@ -434,6 +523,9 @@ func (h *Handler) OIDCCallback(w http.ResponseWriter, r *http.Request) {
 		if v, ok := userinfoData["oidc"].(string); ok {
 			oidcClaim = v
 		}
+		if v, ok := userinfoData["idp_name"].(string); ok {
+			idpName = v
+		}
 	}
 
 	ctx := r.Context()
@@ -441,7 +533,7 @@ func (h *Handler) OIDCCallback(w http.ResponseWriter, r *http.Request) {
 
 	if err != nil && inviteToken != "" {
 		// New identity + invite
-		invite, invErr := h.queries.GetInviteByToken(ctx, inviteToken)
+		invite, invErr := h.queries.GetInviteByToken(ctx, hashToken(inviteToken))
 		if invErr != nil || invite.Used || invite.ExpiresAt.Before(time.Now()) {
 			http.Redirect(w, r, h.cfg.BaseURL+"/login?error=invalid_invite", http.StatusFound)
 			return
@@ -449,9 +541,14 @@ func (h *Handler) OIDCCallback(w http.ResponseWriter, r *http.Request) {
 
 		ident := &models.UserIdentity{
 			UserID: invite.UserID, Issuer: issuer, Subject: sub, Email: email,
-			EPPN: eppn, OIDC: oidcClaim, CILogonID: cilogonID, DisplayName: oidcName,
+			EPPN: eppn, OIDC: oidcClaim, CILogonID: cilogonID, IdPName: idpName, DisplayName: oidcName,
 		}
 		if createErr := h.queries.CreateIdentity(ctx, ident); createErr != nil {
+			if pgErr, ok := createErr.(*pgconn.PgError); ok && pgErr.Code == "23505" {
+				log.Warn().Str("issuer", issuer).Str("subject", sub).Msg("Identity already linked to another account")
+				http.Redirect(w, r, h.cfg.BaseURL+"/login?error=identity_already_linked", http.StatusFound)
+				return
+			}
 			log.Error().Err(createErr).Msg("Failed to create identity")
 			respondError(w, http.StatusInternalServerError, "Failed to link identity")
 			return
@@ -459,16 +556,7 @@ func (h *Handler) OIDCCallback(w http.ResponseWriter, r *http.Request) {
 
 		// Use the user's existing highest role (roles were set when user was created)
 		userRoles, _ := h.queries.ListUserRoles(ctx, invite.UserID)
-		effectiveRole := RoleReadOnly
-		for _, ur := range userRoles {
-			if ur.Role == RoleAdmin {
-				effectiveRole = RoleAdmin
-				break
-			}
-			if ur.Role == RoleGrantAdmin {
-				effectiveRole = RoleGrantAdmin
-			}
-		}
+		sessRole := effectiveRole(userRoles)
 
 		_ = h.queries.MarkInviteUsed(ctx, invite.ID)
 		_ = h.queries.UpdateUserLastLogin(ctx, invite.UserID)
@@ -481,17 +569,25 @@ func (h *Handler) OIDCCallback(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
+		rawToken, tokenHash, genErr := generateToken()
+		if genErr != nil {
+			log.Error().Err(err).Msg("Failed to generate session token")
+			respondError(w, http.StatusInternalServerError, "Failed to generate session token")
+			return
+		}
 		session := &models.Session{
-			UserID: invite.UserID, Role: effectiveRole,
+			UserID: invite.UserID, Role: sessRole,
+			TokenHash: tokenHash,
 			ExpiresAt: time.Now().Add(sessionDuration),
 		}
 		if sessErr := h.queries.CreateSession(ctx, session); sessErr != nil {
+			log.Error().Err(err).Msg("Failed to create session")
 			respondError(w, http.StatusInternalServerError, "Failed to create session")
 			return
 		}
 
 		http.SetCookie(w, &http.Cookie{
-			Name: sessionCookieName, Value: session.ID, Path: "/",
+			Name: sessionCookieName, Value: rawToken, Path: "/",
 			MaxAge: int(sessionDuration.Seconds()), HttpOnly: true, SameSite: http.SameSiteLaxMode,
 		})
 
@@ -515,28 +611,27 @@ func (h *Handler) OIDCCallback(w http.ResponseWriter, r *http.Request) {
 	// Existing identity
 	_ = h.queries.UpdateUserLastLogin(ctx, identity.UserID)
 	roles, _ := h.queries.ListUserRoles(ctx, identity.UserID)
-	effectiveRole := RoleReadOnly
-	for _, role := range roles {
-		if role.Role == RoleAdmin {
-			effectiveRole = RoleAdmin
-			break
-		}
-		if role.Role == RoleGrantAdmin {
-			effectiveRole = RoleGrantAdmin
-		}
-	}
+	sessRole := effectiveRole(roles)
 
+	rawToken, tokenHash, genErr := generateToken()
+	if genErr != nil {
+		log.Error().Err(err).Msg("Failed to generate session token")
+		respondError(w, http.StatusInternalServerError, "Failed to generate session token")
+		return
+	}
 	session := &models.Session{
-		UserID: identity.UserID, Role: effectiveRole,
+		UserID: identity.UserID, Role: sessRole,
+		TokenHash: tokenHash,
 		ExpiresAt: time.Now().Add(sessionDuration),
 	}
 	if sessErr := h.queries.CreateSession(ctx, session); sessErr != nil {
+		log.Error().Err(err).Msg("Failed to create session")
 		respondError(w, http.StatusInternalServerError, "Failed to create session")
 		return
 	}
 
 	http.SetCookie(w, &http.Cookie{
-		Name: sessionCookieName, Value: session.ID, Path: "/",
+		Name: sessionCookieName, Value: rawToken, Path: "/",
 		MaxAge: int(sessionDuration.Seconds()), HttpOnly: true, SameSite: http.SameSiteLaxMode,
 	})
 
@@ -579,7 +674,7 @@ func (h *Handler) UpdateOIDCConfig(w http.ResponseWriter, r *http.Request) {
 		_ = h.queries.SetAppConfig(ctx, "oidc_client_id", req.ClientID)
 	}
 	if req.ClientSecret != "" {
-		_ = h.queries.SetAppConfig(ctx, "oidc_client_secret", req.ClientSecret)
+		_ = h.setEncryptedConfig(ctx, "oidc_client_secret", req.ClientSecret)
 	}
 	respondJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
@@ -589,19 +684,22 @@ func (h *Handler) UpdateOIDCConfig(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) ListUsers(w http.ResponseWriter, r *http.Request) {
 	users, err := h.queries.ListUsers(r.Context())
 	if err != nil {
+		log.Error().Err(err).Msg("Failed to list users")
 		respondError(w, http.StatusInternalServerError, "Failed to list users")
 		return
 	}
 
 	type userInfo struct {
 		models.User
-		Roles      []string              `json:"roles"`
-		Identities []models.UserIdentity `json:"identities"`
+		Roles        []string              `json:"roles"`
+		Identities   []models.UserIdentity `json:"identities"`
+		Institutions []string              `json:"institutions"`
 	}
 	result := make([]userInfo, 0, len(users))
 	for _, u := range users {
 		roles, _ := h.queries.ListUserRoles(r.Context(), u.ID)
 		idents, _ := h.queries.ListUserIdentities(r.Context(), u.ID)
+		insts, _ := h.queries.ListUserInstitutionNames(r.Context(), u.ID)
 		roleStrs := make([]string, len(roles))
 		for i, rl := range roles {
 			roleStrs[i] = rl.Role
@@ -609,7 +707,10 @@ func (h *Handler) ListUsers(w http.ResponseWriter, r *http.Request) {
 		if idents == nil {
 			idents = []models.UserIdentity{}
 		}
-		result = append(result, userInfo{User: u, Roles: roleStrs, Identities: idents})
+		if insts == nil {
+			insts = []string{}
+		}
+		result = append(result, userInfo{User: u, Roles: roleStrs, Identities: idents, Institutions: insts})
 	}
 	respondJSON(w, http.StatusOK, result)
 }
@@ -634,6 +735,7 @@ func (h *Handler) CreateUserAccount(w http.ResponseWriter, r *http.Request) {
 
 	user := &models.User{DisplayName: req.DisplayName, Status: "active"}
 	if err := h.queries.CreateUser(r.Context(), user); err != nil {
+		log.Error().Err(err).Msg("Failed to create user")
 		respondError(w, http.StatusInternalServerError, "Failed to create user")
 		return
 	}
@@ -665,6 +767,7 @@ func (h *Handler) UpdateUserAccount(w http.ResponseWriter, r *http.Request) {
 		user.Status = req.Status
 	}
 	if err := h.queries.UpdateUser(r.Context(), user); err != nil {
+		log.Error().Err(err).Msg("Failed to update user")
 		respondError(w, http.StatusInternalServerError, "Failed to update user")
 		return
 	}
@@ -675,6 +778,7 @@ func (h *Handler) DeleteUserAccount(w http.ResponseWriter, r *http.Request) {
 	userID := chi.URLParam(r, "userID")
 	_ = h.queries.DeleteUserSessions(r.Context(), userID)
 	if err := h.queries.DeleteUser(r.Context(), userID); err != nil {
+		log.Error().Err(err).Msg("Failed to delete user")
 		respondError(w, http.StatusInternalServerError, "Failed to delete user")
 		return
 	}
@@ -695,6 +799,7 @@ func (h *Handler) AddUserRoleHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := h.queries.AddUserRole(r.Context(), userID, req.Role); err != nil {
+		log.Error().Err(err).Msg("Failed to add role")
 		respondError(w, http.StatusInternalServerError, "Failed to add role")
 		return
 	}
@@ -705,6 +810,7 @@ func (h *Handler) RemoveUserRoleHandler(w http.ResponseWriter, r *http.Request) 
 	userID := chi.URLParam(r, "userID")
 	role := chi.URLParam(r, "role")
 	if err := h.queries.RemoveUserRole(r.Context(), userID, role); err != nil {
+		log.Error().Err(err).Msg("Failed to remove role")
 		respondError(w, http.StatusInternalServerError, "Failed to remove role")
 		return
 	}
@@ -714,6 +820,7 @@ func (h *Handler) RemoveUserRoleHandler(w http.ResponseWriter, r *http.Request) 
 func (h *Handler) RemoveUserIdentityHandler(w http.ResponseWriter, r *http.Request) {
 	identityID := chi.URLParam(r, "identityID")
 	if err := h.queries.DeleteIdentity(r.Context(), identityID); err != nil {
+		log.Error().Err(err).Msg("Failed to remove identity")
 		respondError(w, http.StatusInternalServerError, "Failed to remove identity")
 		return
 	}
@@ -731,30 +838,17 @@ func (h *Handler) CreateInviteHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Derive role from user's existing roles (highest privilege)
-	userRoles, _ := h.queries.ListUserRoles(r.Context(), userID)
-	assignedRole := RoleReadOnly
-	for _, ur := range userRoles {
-		if ur.Role == RoleAdmin {
-			assignedRole = RoleAdmin
-			break
-		}
-		if ur.Role == RoleGrantAdmin {
-			assignedRole = RoleGrantAdmin
-		}
-	}
-
 	tokenBytes := make([]byte, 32)
 	_, _ = rand.Read(tokenBytes)
 	token := hex.EncodeToString(tokenBytes)
 
 	invite := &models.Invite{
-		Token:     token,
+		TokenHash: hashToken(token),
 		UserID:    userID,
-		Role:      assignedRole,
 		ExpiresAt: time.Now().Add(inviteExpiry),
 	}
 	if err := h.queries.CreateInvite(r.Context(), invite); err != nil {
+		log.Error().Err(err).Str("user_id", userID).Msg("Failed to create invite")
 		respondError(w, http.StatusInternalServerError, "Failed to create invite")
 		return
 	}
@@ -771,6 +865,7 @@ func (h *Handler) ListInvitesHandler(w http.ResponseWriter, r *http.Request) {
 	userID := chi.URLParam(r, "userID")
 	invites, err := h.queries.ListInvites(r.Context(), userID)
 	if err != nil {
+		log.Error().Err(err).Msg("Failed to list invites")
 		respondError(w, http.StatusInternalServerError, "Failed to list invites")
 		return
 	}
@@ -783,6 +878,7 @@ func (h *Handler) ListInvitesHandler(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) DeleteInviteHandler(w http.ResponseWriter, r *http.Request) {
 	inviteID := chi.URLParam(r, "inviteID")
 	if err := h.queries.DeleteInvite(r.Context(), inviteID); err != nil {
+		log.Error().Err(err).Msg("Failed to delete invite")
 		respondError(w, http.StatusInternalServerError, "Failed to delete invite")
 		return
 	}
@@ -906,4 +1002,48 @@ func fetchUserinfo(userinfoURL, accessToken string) (map[string]any, error) {
 	}
 	var data map[string]any
 	return data, json.Unmarshal(body, &data)
+}
+
+// --- User institution access management (admin / grant_admin) ---
+
+func (h *Handler) AddUserInstitutionHandler(w http.ResponseWriter, r *http.Request) {
+	userID := chi.URLParam(r, "userID")
+	var req struct {
+		Institution string `json:"institution"`
+	}
+	if err := decodeJSON(r, &req); err != nil || req.Institution == "" {
+		respondError(w, http.StatusBadRequest, "Institution name required")
+		return
+	}
+	if err := h.queries.AddUserInstitution(r.Context(), userID, req.Institution); err != nil {
+		log.Error().Err(err).Msg("Failed to add institution access")
+		respondError(w, http.StatusInternalServerError, "Failed to add institution access")
+		return
+	}
+	respondJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+func (h *Handler) RemoveUserInstitutionHandler(w http.ResponseWriter, r *http.Request) {
+	userID := chi.URLParam(r, "userID")
+	institution := chi.URLParam(r, "institution")
+	if err := h.queries.RemoveUserInstitution(r.Context(), userID, institution); err != nil {
+		log.Error().Err(err).Msg("Failed to remove institution access")
+		respondError(w, http.StatusInternalServerError, "Failed to remove institution access")
+		return
+	}
+	respondJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+func (h *Handler) ListUserInstitutionsHandler(w http.ResponseWriter, r *http.Request) {
+	userID := chi.URLParam(r, "userID")
+	insts, err := h.queries.ListUserInstitutionNames(r.Context(), userID)
+	if err != nil {
+		log.Error().Err(err).Msg("Failed to list institution access")
+		respondError(w, http.StatusInternalServerError, "Failed to list institution access")
+		return
+	}
+	if insts == nil {
+		insts = []string{}
+	}
+	respondJSON(w, http.StatusOK, insts)
 }
