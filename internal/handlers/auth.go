@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -939,9 +940,14 @@ func fetchWellKnown(issuer string) (*oidcWellKnown, error) {
 }
 
 func exchangeCode(tokenURL, code, clientID, clientSecret, redirectURI string) (*oidcTokenResponse, error) {
-	data := fmt.Sprintf("grant_type=authorization_code&code=%s&client_id=%s&client_secret=%s&redirect_uri=%s",
-		code, clientID, clientSecret, redirectURI)
-	resp, err := http.Post(tokenURL, "application/x-www-form-urlencoded", strings.NewReader(data))
+	form := url.Values{
+		"grant_type":    {"authorization_code"},
+		"code":          {code},
+		"client_id":     {clientID},
+		"client_secret": {clientSecret},
+		"redirect_uri":  {redirectURI},
+	}
+	resp, err := http.PostForm(tokenURL, form)
 	if err != nil {
 		return nil, err
 	}
@@ -951,7 +957,7 @@ func exchangeCode(tokenURL, code, clientID, clientSecret, redirectURI string) (*
 		return nil, err
 	}
 	if resp.StatusCode != 200 {
-		return nil, fmt.Errorf("token exchange failed: %s", string(body))
+		return nil, fmt.Errorf("token exchange failed (HTTP %d): %s", resp.StatusCode, string(body))
 	}
 	var tr oidcTokenResponse
 	return &tr, json.Unmarshal(body, &tr)
