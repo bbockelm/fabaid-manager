@@ -22,7 +22,8 @@ export default function LoginPage() {
 function LoginContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const { isAuthenticated, isLoading: authLoading, refetch } = useAuth();
+  const { session, isAuthenticated, isLoading: authLoading, refetch, logout } = useAuth();
+  const isDisabled = !!session?.user && session.user.status !== 'active';
   const [mode, setMode] = useState<AuthMode | null>(null);
   const [loading, setLoading] = useState(true);
   const [devName, setDevName] = useState('Developer');
@@ -81,7 +82,19 @@ function LoginContent() {
           <div className="p-3 text-sm text-red-700 bg-red-50 rounded-md">{error}</div>
         )}
 
-        {mode?.mode === 'dev' ? (
+        {isDisabled ? (
+          <div className="space-y-4">
+            <div className="p-3 text-sm text-red-700 bg-red-50 rounded-md">
+              Your account has been disabled. Please contact an administrator.
+            </div>
+            <button
+              onClick={() => logout()}
+              className="w-full py-2 px-4 bg-gray-600 text-white rounded-md hover:bg-gray-700 font-medium"
+            >
+              Sign Out
+            </button>
+          </div>
+        ) : mode?.mode === 'dev' ? (
           <div className="space-y-4">
             <div className="p-3 text-sm text-amber-700 bg-amber-50 rounded-md">
               ⚠️ Development mode — no OIDC required

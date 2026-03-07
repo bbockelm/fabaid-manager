@@ -62,7 +62,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     window.location.href = '/login';
   }, [queryClient]);
 
-  const isAuthenticated = !!session?.user;
+  const isAuthenticated = !!session?.user && session.user.status === 'active';
   const isAdmin = session?.role === 'admin';
   const isGrantAdmin = session?.role === 'grant_admin';
   const isSubawardAdmin = session?.role === 'subaward_admin';
