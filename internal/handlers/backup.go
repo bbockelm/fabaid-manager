@@ -108,6 +108,22 @@ func (h *Handler) DeleteBackup(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusNoContent, nil)
 }
 
+// DeleteFailedBackups removes all failed backups.
+func (h *Handler) DeleteFailedBackups(w http.ResponseWriter, r *http.Request) {
+	if h.backupSvc == nil {
+		respondError(w, http.StatusServiceUnavailable, "backup service not configured")
+		return
+	}
+
+	deleted, err := h.backupSvc.DeleteFailedBackups(r.Context())
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	respondJSON(w, http.StatusOK, map[string]int{"deleted": deleted})
+}
+
 // UploadRestore accepts a backup file upload and restores from it.
 func (h *Handler) UploadRestore(w http.ResponseWriter, r *http.Request) {
 	if h.backupSvc == nil {

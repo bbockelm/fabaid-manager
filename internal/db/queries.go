@@ -1674,6 +1674,18 @@ func (q *Queries) FailBackup(ctx context.Context, id string, errMsg string) erro
 	return err
 }
 
+// FailStaleBackups marks any backups still in 'running' state as failed.
+// Call this at startup to clean up after a crash or restart.
+func (q *Queries) FailStaleBackups(ctx context.Context) (int64, error) {
+	tag, err := q.pool.Exec(ctx, `
+		UPDATE backups SET status='failed', error_msg='server restarted during backup', completed_at=NOW()
+		WHERE status='running'`)
+	if err != nil {
+		return 0, err
+	}
+	return tag.RowsAffected(), nil
+}
+
 func (q *Queries) ListBackups(ctx context.Context) ([]models.Backup, error) {
 	rows, err := q.pool.Query(ctx, `
 		SELECT id, filename, s3_key, s3_bucket, size_bytes, status,
@@ -1717,6 +1729,31 @@ func (q *Queries) GetBackup(ctx context.Context, id string) (*models.Backup, err
 func (q *Queries) DeleteBackupRecord(ctx context.Context, id string) error {
 	_, err := q.pool.Exec(ctx, `DELETE FROM backups WHERE id = $1`, id)
 	return err
+}
+
+// ListFailedBackups returns all backups with status 'failed'.
+func (q *Queries) ListFailedBackups(ctx context.Context) ([]models.Backup, error) {
+	rows, err := q.pool.Query(ctx, `
+		SELECT id, filename, s3_key, s3_bucket, size_bytes, status,
+		       COALESCE(status_detail,''), COALESCE(error_msg,''), initiated_by, encrypted,
+		       COALESCE(checksum,''), started_at, completed_at, created_at
+		FROM backups WHERE status='failed'
+		ORDER BY started_at DESC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var backups []models.Backup
+	for rows.Next() {
+		var b models.Backup
+		if err := rows.Scan(&b.ID, &b.Filename, &b.S3Key, &b.S3Bucket, &b.SizeBytes,
+			&b.Status, &b.StatusDetail, &b.ErrorMsg, &b.InitiatedBy, &b.Encrypted, &b.Checksum,
+			&b.StartedAt, &b.CompletedAt, &b.CreatedAt); err != nil {
+			return nil, err
+		}
+		backups = append(backups, b)
+	}
+	return backups, nil
 }
 
 // --- Object Hashes ---

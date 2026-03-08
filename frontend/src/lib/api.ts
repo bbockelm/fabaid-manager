@@ -715,6 +715,8 @@ export const api = {
       fetchJSON<{ status: string }>(`/backups/${backupId}/restore`, { method: 'POST' }),
     delete: (backupId: string) =>
       fetchJSON<void>(`/backups/${backupId}`, { method: 'DELETE' }),
+    deleteFailed: () =>
+      fetchJSON<{ deleted: number }>('/backups/failed', { method: 'DELETE' }),
     getPerBackupKey: (backupId: string) =>
       fetchJSON<{ key: string; filename: string }>(`/backups/${backupId}/key`),
     getGeneralBackupKey: () =>

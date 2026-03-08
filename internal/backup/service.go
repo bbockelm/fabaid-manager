@@ -685,3 +685,30 @@ func (s *Service) DeleteBackup(ctx context.Context, backupID string) error {
 	s.queries.DeleteObjectHash(ctx, b.S3Key)
 	return s.queries.DeleteBackupRecord(ctx, backupID)
 }
+
+// DeleteFailedBackups removes all failed backups from S3 and the database.
+func (s *Service) DeleteFailedBackups(ctx context.Context) (int, error) {
+	failed, err := s.queries.ListFailedBackups(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("listing failed backups: %w", err)
+	}
+
+	client, _, cErr := s.backupClient(ctx)
+
+	deleted := 0
+	for _, b := range failed {
+		// Best-effort S3 cleanup
+		if cErr == nil && b.S3Key != "" {
+			if err := client.RemoveObject(ctx, b.S3Bucket, b.S3Key, minio.RemoveObjectOptions{}); err != nil {
+				log.Warn().Err(err).Str("key", b.S3Key).Msg("Failed to delete failed backup from S3")
+			}
+			s.queries.DeleteObjectHash(ctx, b.S3Key)
+		}
+		if err := s.queries.DeleteBackupRecord(ctx, b.ID); err != nil {
+			log.Warn().Err(err).Str("id", b.ID).Msg("Failed to delete failed backup record")
+			continue
+		}
+		deleted++
+	}
+	return deleted, nil
+}

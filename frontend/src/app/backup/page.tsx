@@ -218,6 +218,13 @@ export default function BackupPage() {
     },
   });
 
+  const deleteFailedMutation = useMutation({
+    mutationFn: api.backup.deleteFailed,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['backups'] });
+    },
+  });
+
   const restoreMutation = useMutation({
     mutationFn: (id: string) => api.backup.restore(id),
     onSuccess: () => {
@@ -256,6 +263,7 @@ export default function BackupPage() {
   };
 
   const lastCompleted = backups?.find(b => b.status === 'completed');
+  const failedCount = backups?.filter(b => b.status === 'failed').length ?? 0;
 
   if (isLoading) return <div className="p-4">Loading backups...</div>;
   if (error) return (
@@ -301,6 +309,18 @@ export default function BackupPage() {
             >
               🔑 General Key
             </button>
+            {failedCount > 0 && (
+              <button
+                onClick={() => {
+                  if (confirm(`Delete all ${failedCount} failed backup(s)?`)) deleteFailedMutation.mutate();
+                }}
+                disabled={deleteFailedMutation.isPending}
+                className="px-4 py-2 border border-red-300 bg-red-50 rounded-md hover:bg-red-100 transition-colors text-sm font-medium text-red-800 disabled:opacity-50"
+                title="Remove all failed backups"
+              >
+                {deleteFailedMutation.isPending ? 'Clearing...' : `🧹 Clear ${failedCount} Failed`}
+              </button>
+            )}
           </div>
         )}
       </div>

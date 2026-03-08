@@ -249,6 +249,7 @@ func New(cfg *config.Config, pool *pgxpool.Pool, store *storage.Store) (*chi.Mux
 					r.Use(handlers.RequireRole(handlers.RoleAdmin))
 					r.Post("/trigger", h.TriggerBackup)
 					r.Post("/upload-restore", h.UploadRestore)
+					r.Delete("/failed", h.DeleteFailedBackups)
 					r.Get("/settings", h.GetBackupSettings)
 					r.Put("/settings", h.UpdateBackupSettings)
 					r.Get("/general-key", h.GetGeneralBackupKey)

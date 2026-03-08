@@ -82,6 +82,14 @@ func main() {
 	}
 
 	queries := db.NewQueries(pool)
+
+	// Clean up any backups left in 'running' state from a previous crash/restart
+	if n, err := queries.FailStaleBackups(ctx); err != nil {
+		log.Warn().Err(err).Msg("Failed to clean up stale backups")
+	} else if n > 0 {
+		log.Info().Int64("count", n).Msg("Marked stale running backups as failed")
+	}
+
 	backupSvc := backup.NewService(cfg, queries, store, enc)
 	h.SetBackupService(backupSvc)
 
