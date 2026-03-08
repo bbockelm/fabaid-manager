@@ -18,8 +18,8 @@ COPY --from=node-builder /build/out internal/frontend/dist/
 RUN CGO_ENABLED=0 GOOS=linux go build -tags embed_frontend -o /fabaid-server ./cmd/server
 
 # --- Production image ---
-FROM alpine:3.20
-RUN apk add --no-cache ca-certificates postgresql16-client
+FROM alpine:3.21
+RUN apk add --no-cache ca-certificates postgresql17-client
 WORKDIR /app
 COPY --from=go-builder /fabaid-server .
 
