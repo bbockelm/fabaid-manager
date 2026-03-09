@@ -239,7 +239,7 @@ function DocumentTable({
   };
 
   return (
-    <div className={`bg-white rounded-lg border overflow-hidden ${isDeletedView ? 'opacity-60' : ''}`}>
+    <div className={`bg-white rounded-lg border overflow-x-auto ${isDeletedView ? 'opacity-60' : ''}`}>
       <table className="w-full">
         <thead className="bg-gray-50 border-b">
           <tr>

@@ -285,7 +285,7 @@ function KeyTable({
   };
 
   return (
-    <div className={`bg-white rounded-lg border overflow-hidden ${isRevoked ? 'opacity-60' : ''}`}>
+    <div className={`bg-white rounded-lg border overflow-x-auto ${isRevoked ? 'opacity-60' : ''}`}>
       <div className="px-4 py-3 bg-gray-50 border-b">
         <h3 className="text-sm font-semibold text-gray-700">{title}</h3>
       </div>

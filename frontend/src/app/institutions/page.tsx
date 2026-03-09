@@ -431,7 +431,7 @@ function PersonnelPanel({ personnel, institution }: { personnel: Personnel[]; in
   }
 
   return (
-    <div>
+    <div className="overflow-x-auto">
       <table className="w-full text-sm">
         <thead className="bg-gray-50 border-b">
           <tr>
@@ -812,7 +812,7 @@ function InstitutionBudgetsPanel({
         />
       )}
 
-      <div className="grid grid-cols-5 gap-3">
+      <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-3">
         {PROJECT_YEARS.map((year) => {
           const yearBudgets = budgetsByYear[year] ?? [];
           const latest = yearBudgets.find((b) => b.is_latest);
@@ -866,7 +866,7 @@ function NewBudgetVersionForm({
       onSubmit={(e) => { e.preventDefault(); onSubmit(form); }}
       className="bg-gray-50 p-4 rounded border space-y-3"
     >
-      <div className="grid grid-cols-3 gap-3">
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
         <div>
           <label className="block text-xs font-medium text-gray-600 mb-1">Fiscal Year</label>
           <select
@@ -960,6 +960,7 @@ function InvoicePanel({ grantId, subawardId }: { grantId: string; subawardId: st
         />
       )}
 
+      <div className="overflow-x-auto">
       <table className="w-full text-sm">
         <thead className="bg-gray-50 border-b">
           <tr>
@@ -1000,6 +1001,7 @@ function InvoicePanel({ grantId, subawardId }: { grantId: string; subawardId: st
           )}
         </tbody>
       </table>
+      </div>
     </div>
   );
 }
@@ -1112,6 +1114,7 @@ function SOWPanel({ grantId, subawardId }: { grantId: string; subawardId: string
         />
       )}
 
+      <div className="overflow-x-auto">
       <table className="w-full text-sm">
         <thead className="bg-gray-50 border-b">
           <tr>
@@ -1154,6 +1157,7 @@ function SOWPanel({ grantId, subawardId }: { grantId: string; subawardId: string
           )}
         </tbody>
       </table>
+      </div>
     </div>
   );
 }

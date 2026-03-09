@@ -22,7 +22,7 @@ const adminNavItems = [
   { label: 'API Keys', href: '/admin/api-keys', icon: '🔐' },
 ];
 
-export function Sidebar() {
+export function Sidebar({ isOpen, onClose }: { isOpen: boolean; onClose: () => void }) {
   const pathname = usePathname();
   const { session, isAuthenticated, isAdmin, isGrantAdmin, isSubawardAdmin, logout } = useAuth();
 
@@ -41,11 +41,36 @@ export function Sidebar() {
       : 'bg-gray-400/30 text-gray-200';
 
   return (
-    <aside className="w-64 bg-nsf-blue text-white flex flex-col">
-      <div className="p-6 border-b border-white/10">
-        <h1 className="text-xl font-bold">Project Tracker</h1>
-        <p className="text-xs text-blue-200 mt-1">FabAID</p>
-      </div>
+    <>
+      {/* Mobile backdrop */}
+      {isOpen && (
+        <div
+          className="fixed inset-0 bg-black/50 z-40 md:hidden"
+          onClick={onClose}
+        />
+      )}
+
+      <aside
+        className={`
+          fixed inset-y-0 left-0 z-50 w-64 bg-nsf-blue text-white flex flex-col
+          transform transition-transform duration-200 ease-in-out
+          md:relative md:translate-x-0
+          ${isOpen ? 'translate-x-0' : '-translate-x-full'}
+        `}
+      >
+        <div className="p-6 border-b border-white/10 flex items-center justify-between">
+          <div>
+            <h1 className="text-xl font-bold">Project Tracker</h1>
+            <p className="text-xs text-blue-200 mt-1">FabAID</p>
+          </div>
+          <button
+            onClick={onClose}
+            aria-label="Close menu"
+            className="md:hidden text-blue-200 hover:text-white text-lg leading-none"
+          >
+            ✕
+          </button>
+        </div>
       <nav className="flex-1 p-4 space-y-1">
         {visibleNavItems.map((item) => {
           const isActive =
@@ -125,6 +150,7 @@ export function Sidebar() {
         )}
         <div className="text-xs text-blue-300/50 mt-2">v0.1.0</div>
       </div>
-    </aside>
+      </aside>
+    </>
   );
 }

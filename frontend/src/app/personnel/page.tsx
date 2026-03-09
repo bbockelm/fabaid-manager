@@ -140,7 +140,7 @@ function PersonnelPageInner() {
         {institutions.map((inst) => {
           const people = (visiblePersonnel ?? []).filter((p) => p.institution === inst);
           return (
-            <div key={inst} className="bg-white rounded-lg border overflow-hidden">
+            <div key={inst} className="bg-white rounded-lg border overflow-x-auto">
               <div className="px-4 py-3 bg-gray-50 border-b flex items-center gap-2">
                 <h2 className="text-sm font-semibold text-nsf-blue">{inst}</h2>
                 <span className="text-xs text-gray-400">({people.length} {people.length === 1 ? 'person' : 'people'})</span>
@@ -190,7 +190,7 @@ function PersonnelPageInner() {
         })}
         {/* Unassigned personnel */}
         {(visiblePersonnel ?? []).some((p) => !p.institution || !institutions.includes(p.institution)) && (
-          <div className="bg-white rounded-lg border overflow-hidden">
+          <div className="bg-white rounded-lg border overflow-x-auto">
             <div className="px-4 py-3 bg-gray-50 border-b">
               <h2 className="text-sm font-semibold text-gray-500">Unassigned</h2>
             </div>
@@ -382,11 +382,11 @@ function PersonnelDetail({ person, grantId }: { person: Personnel; grantId: stri
           </p>
         )}
         {!isLoading && grouped.size > 0 && (
-          <div className="space-y-3">
+          <div className="space-y-3 overflow-x-auto">
             {Array.from(grouped.entries()).map(([institution, entries]) => (
               <div key={institution}>
                 <div className="text-xs font-medium text-gray-600 mb-1">{institution}</div>
-                <table className="w-full text-xs">
+                <table className="w-full text-xs" style={{minWidth: '500px'}}>
                   <thead>
                     <tr className="border-b">
                       <th className="text-left py-1 text-gray-500 font-medium">Year</th>

@@ -132,7 +132,7 @@ export default function GrantDetailClient({
         </div>
 
         {/* Budget Summary Table */}
-        <div className="bg-white rounded-lg border overflow-hidden">
+        <div className="bg-white rounded-lg border overflow-x-auto">
           <table className="w-full">
             <thead className="bg-gray-50 border-b">
               <tr>
@@ -240,7 +240,7 @@ export default function GrantDetailClient({
       {/* Personnel */}
       <section>
         <h2 className="text-lg font-semibold mb-3">Personnel</h2>
-        <div className="bg-white rounded-lg border overflow-hidden">
+        <div className="bg-white rounded-lg border overflow-x-auto">
           <table className="w-full">
             <thead className="bg-gray-50 border-b">
               <tr>
@@ -276,7 +276,7 @@ export default function GrantDetailClient({
       {/* Subawards */}
       <section>
         <h2 className="text-lg font-semibold mb-3">Subawards</h2>
-        <div className="bg-white rounded-lg border overflow-hidden">
+        <div className="bg-white rounded-lg border overflow-x-auto">
           <table className="w-full">
             <thead className="bg-gray-50 border-b">
               <tr>

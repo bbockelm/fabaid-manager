@@ -492,7 +492,7 @@ function InstitutionBudgetPanel({
       {/* Table 1: Personnel & Fringe */}
       <div>
         <h3 className="text-sm font-semibold text-gray-700 mb-2">Personnel & Fringe Benefits</h3>
-        <div className="bg-white rounded-lg border overflow-hidden">
+        <div className="bg-white rounded-lg border overflow-x-auto">
           <table className="w-full">
             <thead className="bg-gray-50 border-b">
               <tr>
@@ -546,7 +546,7 @@ function InstitutionBudgetPanel({
       {/* Table 2: Other Direct Costs */}
       <div>
         <h3 className="text-sm font-semibold text-gray-700 mb-2">Other Direct Costs</h3>
-        <div className="bg-white rounded-lg border overflow-hidden">
+        <div className="bg-white rounded-lg border overflow-x-auto">
           <table className="w-full">
             <thead className="bg-gray-50 border-b">
               <tr>
@@ -1197,7 +1197,7 @@ function IndirectCostsTable({
   return (
     <div>
       <h3 className="text-sm font-semibold text-gray-700 mb-2">Indirect Costs (F&amp;A) Breakdown</h3>
-      <div className="bg-white rounded-lg border overflow-hidden">
+      <div className="bg-white rounded-lg border overflow-x-auto">
         <table className="w-full">
           <thead className="bg-gray-50 border-b">
             <tr>
@@ -1385,7 +1385,7 @@ function BudgetSummary({ lineItems, overheadRates, entityType, fiscalYear, subaw
   return (
     <div>
       <h3 className="text-sm font-semibold text-gray-700 mb-2">Budget Summary</h3>
-      <div className="bg-white rounded-lg border overflow-hidden">
+      <div className="bg-white rounded-lg border overflow-x-auto">
         <table className="w-full">
           <thead className="bg-gray-50 border-b">
             <tr>

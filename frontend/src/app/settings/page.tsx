@@ -151,7 +151,7 @@ function GrantFields({
   setForm: (f: typeof form) => void;
 }) {
   return (
-    <div className="grid grid-cols-2 gap-4">
+    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
       <div>
         <label className="block text-sm font-medium text-gray-700 mb-1">Award Number</label>
         <input type="text" required value={form.award_number}
@@ -429,7 +429,7 @@ function BackupConfigSection() {
           <p className="text-xs text-gray-400 mb-3">
             Leave empty to store backups in the default S3 bucket.
           </p>
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">Endpoint</label>
               <input
