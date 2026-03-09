@@ -11,3 +11,19 @@ body {
   color: rgb(var(--foreground-rgb));
   background: rgb(var(--background-rgb));
 }
+
+/* ── Mobile-friendly tables ── */
+@media (max-width: 767px) {
+  /* Tighter cell padding on small screens */
+  table th,
+  table td {
+    padding-left: 0.5rem;
+    padding-right: 0.5rem;
+    padding-top: 0.375rem;
+    padding-bottom: 0.375rem;
+  }
+  /* Slightly smaller text */
+  table {
+    font-size: 0.8125rem;
+  }
+}

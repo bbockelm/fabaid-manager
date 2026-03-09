@@ -7,6 +7,7 @@ import { useAuth } from '@/lib/auth-context';
 import { useState, useMemo, useRef, useEffect, Suspense } from 'react';
 import { useSearchParams } from 'next/navigation';
 import CurrencyInput from '@/components/CurrencyInput';
+import { ScrollableTable } from '@/components/ScrollableTable';
 import Link from 'next/link';
 
 // NSF 1030 role categories — the value stored in the DB "role" column
@@ -140,7 +141,7 @@ function PersonnelPageInner() {
         {institutions.map((inst) => {
           const people = (visiblePersonnel ?? []).filter((p) => p.institution === inst);
           return (
-            <div key={inst} className="bg-white rounded-lg border overflow-x-auto">
+            <ScrollableTable key={inst} className="bg-white rounded-lg border">
               <div className="px-4 py-3 bg-gray-50 border-b flex items-center gap-2">
                 <h2 className="text-sm font-semibold text-nsf-blue">{inst}</h2>
                 <span className="text-xs text-gray-400">({people.length} {people.length === 1 ? 'person' : 'people'})</span>
@@ -185,12 +186,12 @@ function PersonnelPageInner() {
                   )}
                 </tbody>
               </table>
-            </div>
+            </ScrollableTable>
           );
         })}
         {/* Unassigned personnel */}
         {(visiblePersonnel ?? []).some((p) => !p.institution || !institutions.includes(p.institution)) && (
-          <div className="bg-white rounded-lg border overflow-x-auto">
+          <ScrollableTable className="bg-white rounded-lg border">
             <div className="px-4 py-3 bg-gray-50 border-b">
               <h2 className="text-sm font-semibold text-gray-500">Unassigned</h2>
             </div>
@@ -227,7 +228,7 @@ function PersonnelPageInner() {
                 ))}
               </tbody>
             </table>
-          </div>
+          </ScrollableTable>
         )}
         {(!visiblePersonnel || visiblePersonnel.length === 0) && institutions.length === 0 && (
           <div className="bg-white rounded-lg border p-8 text-center text-gray-400">
@@ -382,7 +383,7 @@ function PersonnelDetail({ person, grantId }: { person: Personnel; grantId: stri
           </p>
         )}
         {!isLoading && grouped.size > 0 && (
-          <div className="space-y-3 overflow-x-auto">
+          <ScrollableTable className="space-y-3">
             {Array.from(grouped.entries()).map(([institution, entries]) => (
               <div key={institution}>
                 <div className="text-xs font-medium text-gray-600 mb-1">{institution}</div>
@@ -431,7 +432,7 @@ function PersonnelDetail({ person, grantId }: { person: Personnel; grantId: stri
                 </table>
               </div>
             ))}
-          </div>
+          </ScrollableTable>
         )}
       </div>
     </div>

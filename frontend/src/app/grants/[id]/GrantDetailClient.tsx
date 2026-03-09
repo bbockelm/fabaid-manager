@@ -4,6 +4,7 @@ import { useQuery } from '@tanstack/react-query';
 import { api, BudgetSummaryByYear, BudgetSummary } from '@/lib/api';
 import { useMemo, useState } from 'react';
 import Link from 'next/link';
+import { ScrollableTable } from '@/components/ScrollableTable';
 
 // Project years: FabAID is a 5-year project starting 1 May 2026
 const PROJECT_YEARS = [1, 2, 3, 4, 5];
@@ -132,7 +133,7 @@ export default function GrantDetailClient({
         </div>
 
         {/* Budget Summary Table */}
-        <div className="bg-white rounded-lg border overflow-x-auto">
+        <ScrollableTable className="bg-white rounded-lg border">
           <table className="w-full">
             <thead className="bg-gray-50 border-b">
               <tr>
@@ -178,7 +179,7 @@ export default function GrantDetailClient({
               )}
             </tbody>
           </table>
-        </div>
+        </ScrollableTable>
       </section>
 
       {/* Year Overview Cards (when viewing All Years) */}
@@ -240,7 +241,7 @@ export default function GrantDetailClient({
       {/* Personnel */}
       <section>
         <h2 className="text-lg font-semibold mb-3">Personnel</h2>
-        <div className="bg-white rounded-lg border overflow-x-auto">
+        <ScrollableTable className="bg-white rounded-lg border">
           <table className="w-full">
             <thead className="bg-gray-50 border-b">
               <tr>
@@ -270,13 +271,13 @@ export default function GrantDetailClient({
               )}
             </tbody>
           </table>
-        </div>
+        </ScrollableTable>
       </section>
 
       {/* Subawards */}
       <section>
         <h2 className="text-lg font-semibold mb-3">Subawards</h2>
-        <div className="bg-white rounded-lg border overflow-x-auto">
+        <ScrollableTable className="bg-white rounded-lg border">
           <table className="w-full">
             <thead className="bg-gray-50 border-b">
               <tr>
@@ -317,7 +318,7 @@ export default function GrantDetailClient({
               )}
             </tbody>
           </table>
-        </div>
+        </ScrollableTable>
       </section>
     </div>
   );

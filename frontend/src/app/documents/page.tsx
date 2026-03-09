@@ -10,6 +10,7 @@ import { useGrant } from '@/lib/grant-context';
 import { useAuth } from '@/lib/auth-context';
 import { useState, useMemo, useRef } from 'react';
 import Link from 'next/link';
+import { ScrollableTable } from '@/components/ScrollableTable';
 
 const YEAR_LABELS: Record<number, string> = {
   1: 'Y1 (2026-27)',
@@ -239,7 +240,7 @@ function DocumentTable({
   };
 
   return (
-    <div className={`bg-white rounded-lg border overflow-x-auto ${isDeletedView ? 'opacity-60' : ''}`}>
+    <ScrollableTable className={`bg-white rounded-lg border ${isDeletedView ? 'opacity-60' : ''}`}>
       <table className="w-full">
         <thead className="bg-gray-50 border-b">
           <tr>
@@ -299,7 +300,7 @@ function DocumentTable({
           ))}
         </tbody>
       </table>
-    </div>
+    </ScrollableTable>
   );
 }
 

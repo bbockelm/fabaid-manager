@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api, APIKeyInfo, APIKeyCreateResponse } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
+import { ScrollableTable } from '@/components/ScrollableTable';
 
 const ROLES = [
   { value: 'admin', label: 'Admin', color: 'bg-red-100 text-red-800' },
@@ -285,7 +286,7 @@ function KeyTable({
   };
 
   return (
-    <div className={`bg-white rounded-lg border overflow-x-auto ${isRevoked ? 'opacity-60' : ''}`}>
+    <ScrollableTable className={`bg-white rounded-lg border ${isRevoked ? 'opacity-60' : ''}`}>
       <div className="px-4 py-3 bg-gray-50 border-b">
         <h3 className="text-sm font-semibold text-gray-700">{title}</h3>
       </div>
@@ -363,6 +364,6 @@ function KeyTable({
           })}
         </tbody>
       </table>
-    </div>
+    </ScrollableTable>
   );
 }

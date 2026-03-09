@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { useGrant } from '@/lib/grant-context';
 import { useQuery } from '@tanstack/react-query';
 import { api } from '@/lib/api';
+import { ScrollableTable } from '@/components/ScrollableTable';
 
 const PROJECT_YEARS = [1, 2, 3, 4, 5];
 const YEAR_LABELS: Record<number, string> = {
@@ -149,7 +150,7 @@ export default function DashboardPage() {
       {/* Institutions overview */}
       <section>
         <h2 className="text-lg font-semibold mb-3">Institutions</h2>
-        <div className="bg-white rounded-lg border overflow-x-auto">
+        <ScrollableTable className="bg-white rounded-lg border">
           <table className="w-full">
             <thead className="bg-gray-50 border-b">
               <tr>
@@ -185,7 +186,7 @@ export default function DashboardPage() {
               )}
             </tbody>
           </table>
-        </div>
+        </ScrollableTable>
       </section>
     </div>
   );

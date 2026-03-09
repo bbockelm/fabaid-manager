@@ -1,6 +1,7 @@
 'use client';
 
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { ScrollableTable } from '@/components/ScrollableTable';
 import {
   api,
   WBSArea,
@@ -492,7 +493,7 @@ function InstitutionBudgetPanel({
       {/* Table 1: Personnel & Fringe */}
       <div>
         <h3 className="text-sm font-semibold text-gray-700 mb-2">Personnel & Fringe Benefits</h3>
-        <div className="bg-white rounded-lg border overflow-x-auto">
+        <ScrollableTable className="bg-white rounded-lg border">
           <table className="w-full">
             <thead className="bg-gray-50 border-b">
               <tr>
@@ -540,13 +541,13 @@ function InstitutionBudgetPanel({
               </tfoot>
             )}
           </table>
-        </div>
+        </ScrollableTable>
       </div>
 
       {/* Table 2: Other Direct Costs */}
       <div>
         <h3 className="text-sm font-semibold text-gray-700 mb-2">Other Direct Costs</h3>
-        <div className="bg-white rounded-lg border overflow-x-auto">
+        <ScrollableTable className="bg-white rounded-lg border">
           <table className="w-full">
             <thead className="bg-gray-50 border-b">
               <tr>
@@ -587,7 +588,7 @@ function InstitutionBudgetPanel({
               </tfoot>
             )}
           </table>
-        </div>
+        </ScrollableTable>
       </div>
 
       {/* Indirect Costs Breakdown */}
@@ -1197,7 +1198,7 @@ function IndirectCostsTable({
   return (
     <div>
       <h3 className="text-sm font-semibold text-gray-700 mb-2">Indirect Costs (F&amp;A) Breakdown</h3>
-      <div className="bg-white rounded-lg border overflow-x-auto">
+      <ScrollableTable className="bg-white rounded-lg border">
         <table className="w-full">
           <thead className="bg-gray-50 border-b">
             <tr>
@@ -1226,7 +1227,7 @@ function IndirectCostsTable({
             </tr>
           </tbody>
         </table>
-      </div>
+      </ScrollableTable>
     </div>
   );
 }
@@ -1385,7 +1386,7 @@ function BudgetSummary({ lineItems, overheadRates, entityType, fiscalYear, subaw
   return (
     <div>
       <h3 className="text-sm font-semibold text-gray-700 mb-2">Budget Summary</h3>
-      <div className="bg-white rounded-lg border overflow-x-auto">
+      <ScrollableTable className="bg-white rounded-lg border">
         <table className="w-full">
           <thead className="bg-gray-50 border-b">
             <tr>
@@ -1422,7 +1423,7 @@ function BudgetSummary({ lineItems, overheadRates, entityType, fiscalYear, subaw
             ))}
           </tbody>
         </table>
-      </div>
+      </ScrollableTable>
     </div>
   );
 }

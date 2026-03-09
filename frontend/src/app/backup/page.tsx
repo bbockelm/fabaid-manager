@@ -4,6 +4,7 @@ import { useState, useRef } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api, BackupRecord } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
+import { ScrollableTable } from '@/components/ScrollableTable';
 
 function formatBytes(bytes: number): string {
   if (bytes === 0) return '0 B';
@@ -350,7 +351,7 @@ export default function BackupPage() {
       </div>
 
       {/* Backup table */}
-      <div className="bg-white rounded-lg border border-gray-200 overflow-x-auto">
+      <ScrollableTable className="bg-white rounded-lg border border-gray-200">
         <table className="min-w-full divide-y divide-gray-200">
           <thead className="bg-gray-50">
             <tr>
@@ -462,7 +463,7 @@ export default function BackupPage() {
             })}
           </tbody>
         </table>
-      </div>
+      </ScrollableTable>
     </div>
   );
 }

@@ -1,5 +1,6 @@
 'use client';
 
+import { ScrollableTable } from '@/components/ScrollableTable';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api, StatementOfWork } from '@/lib/api';
 import { useGrant } from '@/lib/grant-context';
@@ -114,7 +115,7 @@ export default function SubawardDetailClient() {
           </div>
         )}
 
-        <div className="overflow-x-auto">
+        <ScrollableTable>
           <table className="w-full text-sm">
             <thead className="bg-gray-50 border-b">
               <tr>
@@ -167,7 +168,7 @@ export default function SubawardDetailClient() {
               )}
             </tbody>
           </table>
-        </div>
+        </ScrollableTable>
       </section>
     </div>
   );

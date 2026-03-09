@@ -10,6 +10,7 @@ import {
   PersonnelDefaultWBS,
 } from '@/lib/api';
 import { useGrant } from '@/lib/grant-context';
+import { ScrollableTable } from '@/components/ScrollableTable';
 import { useAuth } from '@/lib/auth-context';
 import { InstitutionFilter } from '@/components/InstitutionFilter';
 import { WBSAllocEditor, useRootColors } from '@/components/WBSAllocationEditor';
@@ -406,7 +407,7 @@ function EffortSummaryTable({
   }
 
   return (
-    <div className="overflow-x-auto">
+    <ScrollableTable>
       <table className="min-w-full text-sm border">
         <thead>
           <tr className="bg-gray-50">
@@ -438,7 +439,7 @@ function EffortSummaryTable({
           {tableRows}
         </tbody>
       </table>
-    </div>
+    </ScrollableTable>
   );
 }
 

@@ -1,5 +1,6 @@
 'use client';
 
+import { ScrollableTable } from '@/components/ScrollableTable';
 import { useQuery } from '@tanstack/react-query';
 import {
   api,
@@ -196,7 +197,7 @@ function InstitutionTable({ overview }: { overview: BudgetOverviewResponse }) {
   return (
     <div>
       <h2 className="text-lg font-semibold text-gray-800 mb-3">By Institution</h2>
-      <div className="overflow-x-auto">
+      <ScrollableTable>
         <table className="min-w-full bg-white border border-gray-200 rounded-lg shadow-sm text-sm">
           <thead>
             <tr className="bg-gray-50 border-b border-gray-200">
@@ -246,7 +247,7 @@ function InstitutionTable({ overview }: { overview: BudgetOverviewResponse }) {
             </tr>
           </tfoot>
         </table>
-      </div>
+      </ScrollableTable>
     </div>
   );
 }
@@ -408,7 +409,7 @@ function WBSTable({ overview }: { overview: BudgetOverviewResponse }) {
     <div>
       <h2 className="text-lg font-semibold text-gray-800 mb-1">By WBS Area</h2>
       <p className="text-xs text-gray-500 mb-3">Direct costs only — indirect (F&amp;A) costs are computed at the institution level.</p>
-      <div className="overflow-x-auto">
+      <ScrollableTable>
         <table className="min-w-full bg-white border border-gray-200 rounded-lg shadow-sm text-sm">
           <thead>
             <tr className="bg-gray-50 border-b border-gray-200">
@@ -454,7 +455,7 @@ function WBSTable({ overview }: { overview: BudgetOverviewResponse }) {
             </tr>
           </tfoot>
         </table>
-      </div>
+      </ScrollableTable>
     </div>
   );
 }

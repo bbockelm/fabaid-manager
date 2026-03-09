@@ -1,5 +1,6 @@
 'use client';
 
+import { ScrollableTable } from '@/components/ScrollableTable';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   api,
@@ -431,7 +432,7 @@ function PersonnelPanel({ personnel, institution }: { personnel: Personnel[]; in
   }
 
   return (
-    <div className="overflow-x-auto">
+    <ScrollableTable>
       <table className="w-full text-sm">
         <thead className="bg-gray-50 border-b">
           <tr>
@@ -455,7 +456,7 @@ function PersonnelPanel({ personnel, institution }: { personnel: Personnel[]; in
       <p className="text-xs text-gray-400 mt-2">
         <Link href="/personnel" className="text-nsf-light hover:underline">Edit personnel</Link>
       </p>
-    </div>
+    </ScrollableTable>
   );
 }
 
@@ -960,7 +961,7 @@ function InvoicePanel({ grantId, subawardId }: { grantId: string; subawardId: st
         />
       )}
 
-      <div className="overflow-x-auto">
+      <ScrollableTable>
       <table className="w-full text-sm">
         <thead className="bg-gray-50 border-b">
           <tr>
@@ -1001,7 +1002,7 @@ function InvoicePanel({ grantId, subawardId }: { grantId: string; subawardId: st
           )}
         </tbody>
       </table>
-      </div>
+      </ScrollableTable>
     </div>
   );
 }
@@ -1114,7 +1115,7 @@ function SOWPanel({ grantId, subawardId }: { grantId: string; subawardId: string
         />
       )}
 
-      <div className="overflow-x-auto">
+      <ScrollableTable>
       <table className="w-full text-sm">
         <thead className="bg-gray-50 border-b">
           <tr>
@@ -1157,7 +1158,7 @@ function SOWPanel({ grantId, subawardId }: { grantId: string; subawardId: string
           )}
         </tbody>
       </table>
-      </div>
+      </ScrollableTable>
     </div>
   );
 }
