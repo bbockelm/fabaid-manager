@@ -478,3 +478,24 @@ type OverheadBaseRow struct {
 	OverheadRateID string
 	BaseAmount     float64
 }
+
+// DocumentProcessingRun records an AI processing run on an uploaded budget document.
+type DocumentProcessingRun struct {
+	ID               string     `json:"id"`
+	DocumentID       string     `json:"document_id"`
+	EntityType       string     `json:"entity_type"`
+	EntityID         string     `json:"entity_id"`
+	Status           string     `json:"status"`        // pending, extracting, processing, applying, completed, failed
+	StatusDetail     string     `json:"status_detail"`
+	SummaryMD        string     `json:"summary_md"`
+	Conversation     string     `json:"conversation"`   // JSON array of messages
+	ActionsTaken     string     `json:"actions_taken"`   // JSON array of tool calls + results
+	ErrorMsg         string     `json:"error_msg,omitempty"`
+	LLMModel         string     `json:"llm_model"`
+	PromptTokens     int        `json:"prompt_tokens"`
+	CompletionTokens int        `json:"completion_tokens"`
+	StartedAt        *time.Time `json:"started_at,omitempty"`
+	CompletedAt      *time.Time `json:"completed_at,omitempty"`
+	CreatedAt        time.Time  `json:"created_at"`
+	UpdatedAt        time.Time  `json:"updated_at"`
+}

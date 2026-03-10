@@ -231,7 +231,14 @@ func New(cfg *config.Config, pool *pgxpool.Pool, store *storage.Store) (*chi.Mux
 					r.Get("/{docID}", h.GetBudgetDocumentInfo)
 					r.Get("/{docID}/download", h.DownloadBudgetDocument)
 					r.Delete("/{docID}", h.SoftDeleteBudgetDocument)
+					r.Post("/{docID}/process", h.ProcessBudgetDocument)
+					r.Post("/{docID}/preview-extract", h.PreviewDocumentExtraction)
+					r.Get("/{docID}/processing-runs", h.ListProcessingRuns)
 				})
+
+				// Processing runs for this entity
+				r.Get("/processing-runs", h.ListEntityProcessingRuns)
+				r.Get("/processing-runs/{runID}", h.GetProcessingRun)
 			})
 
 			// Legacy download endpoint (creates + downloads in one request)

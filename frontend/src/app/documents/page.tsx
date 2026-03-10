@@ -8,9 +8,11 @@ import {
 } from '@/lib/api';
 import { useGrant } from '@/lib/grant-context';
 import { useAuth } from '@/lib/auth-context';
-import { useState, useMemo, useRef } from 'react';
+import { useState, useMemo, useRef, useEffect, Suspense } from 'react';
+import { useSearchParams, useRouter, usePathname } from 'next/navigation';
 import Link from 'next/link';
 import { ScrollableTable } from '@/components/ScrollableTable';
+import { ProcessingActivityStream, ProcessingRunCard } from '@/components/ProcessingActivity';
 
 const YEAR_LABELS: Record<number, string> = {
   1: 'Y1 (2026-27)',
@@ -32,9 +34,21 @@ interface InstitutionOption {
 }
 
 export default function DocumentsPage() {
+  return (
+    <Suspense fallback={<div className="p-4">Loading documents...</div>}>
+      <DocumentsPageInner />
+    </Suspense>
+  );
+}
+
+function DocumentsPageInner() {
   const { grantId, isLoading: grantLoading } = useGrant();
   const { isSubawardAdmin, permittedInstitutions } = useAuth();
-  const [selectedInst, setSelectedInst] = useState<string>('');
+  const searchParams = useSearchParams();
+  const router = useRouter();
+  const pathname = usePathname();
+  const initialEntity = searchParams.get('entity');
+  const [selectedInst, setSelectedInst] = useState<string>(initialEntity ?? '');
   const [showDeleted, setShowDeleted] = useState(false);
 
   const { data: grant } = useQuery({
@@ -64,6 +78,19 @@ export default function DocumentsPage() {
   }, [allInstitutions, isSubawardAdmin, permittedInstitutions]);
 
   const activeInst = institutions.find((i) => `${i.entityType}:${i.entityId}` === selectedInst) || institutions[0];
+
+  // Sync selected institution to URL so page reloads preserve the choice
+  useEffect(() => {
+    const key = activeInst ? `${activeInst.entityType}:${activeInst.entityId}` : '';
+    const params = new URLSearchParams();
+    if (key) params.set('entity', key);
+    const qs = params.toString();
+    const target = qs ? `${pathname}?${qs}` : pathname;
+    const current = `${pathname}${searchParams.toString() ? '?' + searchParams.toString() : ''}`;
+    if (target !== current) {
+      router.replace(target, { scroll: false });
+    }
+  }, [activeInst, pathname, router, searchParams]);
 
   if (grantLoading) return <div className="p-4">Loading...</div>;
   if (!grantId) return <div className="p-4">No project configured. <Link href="/settings" className="text-nsf-light hover:underline">Set up project</Link></div>;
@@ -128,6 +155,9 @@ function InstitutionDocumentsPanel({
 }) {
   const queryClient = useQueryClient();
   const [showUpload, setShowUpload] = useState(false);
+  const [processingDocId, setProcessingDocId] = useState<string | null>(null);
+  const [pendingProcessDocId, setPendingProcessDocId] = useState<string | null>(null);
+  const [userPrompt, setUserPrompt] = useState('');
 
   const docsKey = ['budget-documents', entityType, entityId, showDeleted];
   const { data: documents, isLoading } = useQuery({
@@ -140,6 +170,12 @@ function InstitutionDocumentsPanel({
     queryFn: () => api.institutionBudgets.list(entityType, entityId, false),
   });
 
+  const runsKey = ['processing-runs', entityType, entityId];
+  const { data: processingRuns } = useQuery({
+    queryKey: runsKey,
+    queryFn: () => api.budgetDocuments.listEntityProcessingRuns(entityType, entityId),
+  });
+
   const deleteMutation = useMutation({
     mutationFn: (docId: string) => api.budgetDocuments.delete(entityType, entityId, docId),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: docsKey }),
@@ -147,6 +183,10 @@ function InstitutionDocumentsPanel({
 
   const activeDocuments = (documents ?? []).filter((d) => !d.deleted_at);
   const deletedDocuments = (documents ?? []).filter((d) => d.deleted_at);
+
+  const processingDocFilename = processingDocId
+    ? activeDocuments.find((d) => d.id === processingDocId)?.filename
+    : null;
 
   return (
     <div className="space-y-4">
@@ -165,9 +205,12 @@ function InstitutionDocumentsPanel({
           entityType={entityType}
           entityId={entityId}
           budgets={budgets ?? []}
-          onSuccess={() => {
+          onSuccess={(docId, processWithAI) => {
             queryClient.invalidateQueries({ queryKey: docsKey });
             setShowUpload(false);
+            if (processWithAI && docId) {
+              setProcessingDocId(docId);
+            }
           }}
         />
       )}
@@ -176,7 +219,7 @@ function InstitutionDocumentsPanel({
 
       {!isLoading && activeDocuments.length === 0 && (
         <div className="bg-white rounded-lg border p-8 text-center text-gray-400 text-sm">
-          No documents uploaded yet. Click &quot;+ Upload Document&quot; to add a budget PDF.
+          No documents uploaded yet. Click &quot;+ Upload Document&quot; to add a budget PDF or spreadsheet.
         </div>
       )}
 
@@ -190,7 +233,76 @@ function InstitutionDocumentsPanel({
             if (confirm('Mark this document as deleted? (The file is preserved for audit.)'))
               deleteMutation.mutate(id);
           }}
+          onProcess={(docId) => setPendingProcessDocId(docId)}
+          processingDocId={processingDocId || pendingProcessDocId}
         />
+      )}
+
+      {/* Process confirmation — user can add instructions before starting */}
+      {pendingProcessDocId && !processingDocId && (
+        <div className="bg-white rounded-lg border shadow-sm p-4 space-y-3">
+          <h3 className="text-sm font-medium text-gray-700">
+            🤖 Process: {activeDocuments.find((d) => d.id === pendingProcessDocId)?.filename || 'document'}
+          </h3>
+          <div>
+            <label className="block text-xs font-medium text-gray-500 mb-1">
+              Additional instructions for the AI (optional)
+            </label>
+            <textarea
+              value={userPrompt}
+              onChange={(e) => setUserPrompt(e.target.value)}
+              placeholder={'e.g., "The staff member\'s salary was updated to $95,000 this year" or "Ignore the travel line items"'}
+              className="w-full border rounded-md px-3 py-2 text-sm resize-none h-16"
+            />
+          </div>
+          <div className="flex gap-2">
+            <button
+              onClick={() => {
+                setProcessingDocId(pendingProcessDocId);
+                setPendingProcessDocId(null);
+              }}
+              className="px-4 py-2 bg-indigo-600 text-white rounded-md hover:bg-indigo-700 text-sm transition-colors"
+            >
+              Start Processing
+            </button>
+            <button
+              onClick={() => { setPendingProcessDocId(null); setUserPrompt(''); }}
+              className="px-4 py-2 bg-gray-100 text-gray-700 rounded-md hover:bg-gray-200 text-sm transition-colors"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Active AI processing stream */}
+      {processingDocId && (
+        <div className="space-y-2">
+          <h3 className="text-sm font-medium text-gray-700">
+            🤖 Processing: {processingDocFilename || 'document'}
+          </h3>
+          <ProcessingActivityStream
+            entityType={entityType}
+            entityId={entityId}
+            docId={processingDocId}
+            userPrompt={userPrompt}
+            onComplete={() => {
+              setProcessingDocId(null);
+              setUserPrompt('');
+              queryClient.invalidateQueries({ queryKey: runsKey });
+            }}
+          />
+        </div>
+      )}
+
+      {/* Previous processing runs */}
+      {(processingRuns ?? []).length > 0 && (
+        <div className="space-y-3">
+          <h3 className="text-sm font-medium text-gray-700">Processing History</h3>
+          {(processingRuns ?? []).map((run) => (
+            <ProcessingRunCard key={run.id} run={run} />
+          ))}
+        </div>
       )}
 
       {showDeleted && deletedDocuments.length > 0 && (
@@ -215,6 +327,8 @@ function DocumentTable({
   entityId,
   budgets,
   onDelete,
+  onProcess,
+  processingDocId,
   isDeletedView = false,
 }: {
   documents: BudgetDocument[];
@@ -222,6 +336,8 @@ function DocumentTable({
   entityId: string;
   budgets: InstitutionBudget[];
   onDelete?: (id: string) => void;
+  onProcess?: (docId: string) => void;
+  processingDocId?: string | null;
   isDeletedView?: boolean;
 }) {
   const budgetLabel = (budgetId?: string) => {
@@ -285,6 +401,16 @@ function DocumentTable({
                     >
                       Download
                     </a>
+                    {onProcess && (
+                      <button
+                        onClick={() => onProcess(doc.id)}
+                        disabled={!!processingDocId}
+                        className="text-indigo-500 hover:text-indigo-700 text-xs disabled:opacity-40 disabled:cursor-not-allowed"
+                        title="Process this document with AI to extract budget data"
+                      >
+                        🤖 Process
+                      </button>
+                    )}
                     {onDelete && (
                       <button
                         onClick={() => onDelete(doc.id)}
@@ -313,12 +439,13 @@ function UploadForm({
   entityType: string;
   entityId: string;
   budgets: InstitutionBudget[];
-  onSuccess: () => void;
+  onSuccess: (docId: string | null, processWithAI: boolean) => void;
 }) {
   const fileRef = useRef<HTMLInputElement>(null);
   const [docType, setDocType] = useState('budget');
   const [budgetId, setBudgetId] = useState('');
   const [notes, setNotes] = useState('');
+  const [processWithAI, setProcessWithAI] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState('');
 
@@ -336,7 +463,7 @@ function UploadForm({
     setError('');
     setUploading(true);
     try {
-      await api.budgetDocuments.upload(
+      const doc = await api.budgetDocuments.upload(
         entityType,
         entityId,
         file,
@@ -344,7 +471,7 @@ function UploadForm({
         budgetId || undefined,
         notes || undefined
       );
-      onSuccess();
+      onSuccess(doc.id, processWithAI);
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : 'Upload failed');
     } finally {
@@ -361,11 +488,11 @@ function UploadForm({
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
         <div>
-          <label className="block text-sm font-medium text-gray-700 mb-1">File (PDF) *</label>
+          <label className="block text-sm font-medium text-gray-700 mb-1">File *</label>
           <input
             ref={fileRef}
             type="file"
-            accept=".pdf,application/pdf"
+            accept=".pdf,.xlsx,.xls,.csv,application/pdf,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel,text/csv"
             className="w-full border rounded-md px-3 py-2 text-sm file:mr-3 file:py-1 file:px-3 file:rounded file:border-0 file:text-sm file:bg-nsf-light file:text-white hover:file:bg-nsf-blue"
           />
         </div>
@@ -410,13 +537,24 @@ function UploadForm({
 
       {error && <p className="text-sm text-red-600">{error}</p>}
 
-      <button
-        onClick={handleUpload}
-        disabled={uploading}
-        className="px-4 py-2 bg-nsf-light text-white rounded-md hover:bg-nsf-blue disabled:opacity-50 transition-colors"
-      >
-        {uploading ? 'Encrypting & Uploading...' : 'Upload Document'}
-      </button>
+      <div className="flex items-center gap-4">
+        <button
+          onClick={handleUpload}
+          disabled={uploading}
+          className="px-4 py-2 bg-nsf-light text-white rounded-md hover:bg-nsf-blue disabled:opacity-50 transition-colors"
+        >
+          {uploading ? 'Encrypting & Uploading...' : 'Upload Document'}
+        </button>
+        <label className="flex items-center gap-2 text-sm text-gray-600">
+          <input
+            type="checkbox"
+            checked={processWithAI}
+            onChange={(e) => setProcessWithAI(e.target.checked)}
+            className="rounded"
+          />
+          🤖 Process with AI after upload
+        </label>
+      </div>
     </div>
   );
 }

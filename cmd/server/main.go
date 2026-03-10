@@ -46,6 +46,10 @@ func main() {
 	if err := cfg.DeriveSessionSecret(); err != nil {
 		log.Fatal().Err(err).Msg("Failed to derive session secret")
 	}
+	// Load LLM API key from file if configured.
+	if err := cfg.LoadLLMKeyFile(); err != nil {
+		log.Fatal().Err(err).Msg("Failed to load LLM API key file")
+	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -88,6 +92,13 @@ func main() {
 		log.Warn().Err(err).Msg("Failed to clean up stale backups")
 	} else if n > 0 {
 		log.Info().Int64("count", n).Msg("Marked stale running backups as failed")
+	}
+
+	// Clean up any processing runs stuck in non-terminal states
+	if n, err := queries.FailStaleProcessingRuns(ctx); err != nil {
+		log.Warn().Err(err).Msg("Failed to clean up stale processing runs")
+	} else if n > 0 {
+		log.Info().Int64("count", n).Msg("Marked stale processing runs as failed")
 	}
 
 	backupSvc := backup.NewService(cfg, queries, store, enc)

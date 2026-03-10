@@ -422,6 +422,28 @@ export interface SOWLineItemDescription {
   updated_at?: string;
 }
 
+// --- Document Processing ---
+
+export interface DocumentProcessingRun {
+  id: string;
+  document_id: string;
+  entity_type: string;
+  entity_id: string;
+  status: string; // pending, extracting, processing, applying, completed, failed
+  status_detail: string;
+  summary_md: string;
+  conversation: string;   // JSON string
+  actions_taken: string;  // JSON string
+  error_msg?: string;
+  llm_model: string;
+  prompt_tokens: number;
+  completion_tokens: number;
+  started_at?: string;
+  completed_at?: string;
+  created_at: string;
+  updated_at: string;
+}
+
 // --- Grants ---
 
 export const api = {
@@ -596,6 +618,23 @@ export const api = {
       `${API_BASE}/institution-rates/${entityType}/${entityId}/budget-documents/${docId}/download`,
     delete: (entityType: string, entityId: string, docId: string) =>
       fetchJSON<void>(`/institution-rates/${entityType}/${entityId}/budget-documents/${docId}`, { method: 'DELETE' }),
+    // AI processing
+    processDocument: (entityType: string, entityId: string, docId: string, userPrompt?: string) =>
+      fetchJSON<{ run_id: string; status: string }>(
+        `/institution-rates/${entityType}/${entityId}/budget-documents/${docId}/process`,
+        { method: 'POST', body: JSON.stringify({ user_prompt: userPrompt || '' }) }
+      ),
+    previewExtract: (entityType: string, entityId: string, docId: string) =>
+      fetchJSON<{ filename: string; tables: number; has_text: boolean; markdown: string; text_size: number }>(
+        `/institution-rates/${entityType}/${entityId}/budget-documents/${docId}/preview-extract`,
+        { method: 'POST' }
+      ),
+    listProcessingRuns: (entityType: string, entityId: string, docId: string) =>
+      fetchJSON<DocumentProcessingRun[]>(`/institution-rates/${entityType}/${entityId}/budget-documents/${docId}/processing-runs`),
+    getProcessingRun: (entityType: string, entityId: string, runId: string) =>
+      fetchJSON<DocumentProcessingRun>(`/institution-rates/${entityType}/${entityId}/processing-runs/${runId}`),
+    listEntityProcessingRuns: (entityType: string, entityId: string) =>
+      fetchJSON<DocumentProcessingRun[]>(`/institution-rates/${entityType}/${entityId}/processing-runs`),
   },
 
   subawards: {

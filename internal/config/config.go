@@ -45,6 +45,12 @@ type Config struct {
 
 	// Instance encryption key
 	InstanceKey string `envconfig:"INSTANCE_KEY" default:""`
+
+	// LLM / AI processing
+	LLMAPIKey     string `envconfig:"LLM_API_KEY" default:""`
+	LLMAPIKeyFile string `envconfig:"LLM_API_KEY_FILE" default:""`
+	LLMAPIURL     string `envconfig:"LLM_API_URL" default:"https://api.openai.com/v1"`
+	LLMModel      string `envconfig:"LLM_MODEL" default:"gpt-5.4"`
 }
 
 // Load reads configuration from environment variables.
@@ -113,6 +119,39 @@ func (c *Config) DeriveSessionSecret() error {
 		return fmt.Errorf("deriving session secret: %w", err)
 	}
 	c.SessionSecret = hex.EncodeToString(buf)
+	return nil
+}
+
+// LoadLLMKeyFile reads the LLM API key from the file specified by
+// LLM_API_KEY_FILE, if LLM_API_KEY is not already set. In development
+// mode it also checks the well-known path ".fabaid-openai.key".
+func (c *Config) LoadLLMKeyFile() error {
+	if c.LLMAPIKey != "" {
+		log.Info().Msg("LLM API key configured via environment")
+		return nil
+	}
+
+	file := c.LLMAPIKeyFile
+	if file == "" && c.IsDevelopment() {
+		// Try well-known dev key file
+		if _, err := os.Stat(".fabaid-openai.key"); err == nil {
+			file = ".fabaid-openai.key"
+		}
+	}
+	if file == "" {
+		log.Warn().Msg("No LLM API key configured (set LLM_API_KEY or LLM_API_KEY_FILE); AI document processing will be unavailable")
+		return nil
+	}
+	data, err := os.ReadFile(file)
+	if err != nil {
+		return fmt.Errorf("reading LLM API key file %s: %w", file, err)
+	}
+	key := strings.TrimSpace(string(data))
+	if key == "" {
+		return fmt.Errorf("LLM API key file %s is empty", file)
+	}
+	c.LLMAPIKey = key
+	log.Info().Str("file", file).Str("model", c.LLMModel).Msg("Loaded LLM API key from file")
 	return nil
 }
 

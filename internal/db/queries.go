@@ -2169,3 +2169,126 @@ func (q *Queries) BudgetOverheadBasesFiltered(ctx context.Context, grantID strin
 	}
 	return result, nil
 }
+
+// --- Document Processing Runs ---
+
+// CreateDocumentProcessingRun inserts a new processing-run record and fills in the generated ID.
+func (q *Queries) CreateDocumentProcessingRun(ctx context.Context, r *models.DocumentProcessingRun) error {
+	return q.pool.QueryRow(ctx, `
+		INSERT INTO document_processing_runs
+			(document_id, entity_type, entity_id, status, status_detail, llm_model)
+		VALUES ($1, $2, $3, $4, $5, $6)
+		RETURNING id, created_at, updated_at`,
+		r.DocumentID, r.EntityType, r.EntityID, r.Status, r.StatusDetail, r.LLMModel,
+	).Scan(&r.ID, &r.CreatedAt, &r.UpdatedAt)
+}
+
+// UpdateDocumentProcessingRun updates a processing run in-place.
+func (q *Queries) UpdateDocumentProcessingRun(ctx context.Context, r *models.DocumentProcessingRun) error {
+	// JSONB columns must contain valid JSON; default to "[]" if empty.
+	convo := r.Conversation
+	if convo == "" {
+		convo = "[]"
+	}
+	actions := r.ActionsTaken
+	if actions == "" {
+		actions = "[]"
+	}
+	_, err := q.pool.Exec(ctx, `
+		UPDATE document_processing_runs SET
+			status=$2, status_detail=$3, summary_md=$4, conversation=$5,
+			actions_taken=$6, error_msg=$7, prompt_tokens=$8, completion_tokens=$9,
+			started_at=$10, completed_at=$11, updated_at=now()
+		WHERE id=$1`,
+		r.ID, r.Status, r.StatusDetail, r.SummaryMD, convo,
+		actions, r.ErrorMsg, r.PromptTokens, r.CompletionTokens,
+		r.StartedAt, r.CompletedAt,
+	)
+	return err
+}
+
+// FailStaleProcessingRuns marks any processing runs stuck in non-terminal states as failed.
+// Call at startup to clean up after a crash or restart.
+func (q *Queries) FailStaleProcessingRuns(ctx context.Context) (int64, error) {
+	tag, err := q.pool.Exec(ctx, `
+		UPDATE document_processing_runs
+		SET status='failed',
+		    status_detail='Server restarted during processing',
+		    error_msg='Processing interrupted by server restart',
+		    completed_at=NOW(),
+		    updated_at=NOW()
+		WHERE status NOT IN ('completed', 'failed')`)
+	if err != nil {
+		return 0, err
+	}
+	return tag.RowsAffected(), nil
+}
+
+// GetDocumentProcessingRun fetches a single run by ID.
+func (q *Queries) GetDocumentProcessingRun(ctx context.Context, id string) (*models.DocumentProcessingRun, error) {
+	var r models.DocumentProcessingRun
+	err := q.pool.QueryRow(ctx, `
+		SELECT id, document_id, entity_type, entity_id, status, status_detail,
+			summary_md, conversation, actions_taken, error_msg, llm_model,
+			prompt_tokens, completion_tokens, started_at, completed_at, created_at, updated_at
+		FROM document_processing_runs WHERE id=$1`, id,
+	).Scan(&r.ID, &r.DocumentID, &r.EntityType, &r.EntityID, &r.Status, &r.StatusDetail,
+		&r.SummaryMD, &r.Conversation, &r.ActionsTaken, &r.ErrorMsg, &r.LLMModel,
+		&r.PromptTokens, &r.CompletionTokens, &r.StartedAt, &r.CompletedAt, &r.CreatedAt, &r.UpdatedAt)
+	if err != nil {
+		return nil, err
+	}
+	return &r, nil
+}
+
+// ListDocumentProcessingRuns returns all runs for a given document.
+func (q *Queries) ListDocumentProcessingRuns(ctx context.Context, documentID string) ([]models.DocumentProcessingRun, error) {
+	rows, err := q.pool.Query(ctx, `
+		SELECT id, document_id, entity_type, entity_id, status, status_detail,
+			summary_md, conversation, actions_taken, error_msg, llm_model,
+			prompt_tokens, completion_tokens, started_at, completed_at, created_at, updated_at
+		FROM document_processing_runs WHERE document_id=$1
+		ORDER BY created_at DESC`, documentID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var runs []models.DocumentProcessingRun
+	for rows.Next() {
+		var r models.DocumentProcessingRun
+		if err := rows.Scan(&r.ID, &r.DocumentID, &r.EntityType, &r.EntityID, &r.Status, &r.StatusDetail,
+			&r.SummaryMD, &r.Conversation, &r.ActionsTaken, &r.ErrorMsg, &r.LLMModel,
+			&r.PromptTokens, &r.CompletionTokens, &r.StartedAt, &r.CompletedAt, &r.CreatedAt, &r.UpdatedAt); err != nil {
+			return nil, err
+		}
+		runs = append(runs, r)
+	}
+	return runs, nil
+}
+
+// ListDocumentProcessingRunsByEntity returns all runs for an institution entity.
+func (q *Queries) ListDocumentProcessingRunsByEntity(ctx context.Context, entityType, entityID string) ([]models.DocumentProcessingRun, error) {
+	rows, err := q.pool.Query(ctx, `
+		SELECT id, document_id, entity_type, entity_id, status, status_detail,
+			summary_md, conversation, actions_taken, error_msg, llm_model,
+			prompt_tokens, completion_tokens, started_at, completed_at, created_at, updated_at
+		FROM document_processing_runs WHERE entity_type=$1 AND entity_id=$2
+		ORDER BY created_at DESC`, entityType, entityID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var runs []models.DocumentProcessingRun
+	for rows.Next() {
+		var r models.DocumentProcessingRun
+		if err := rows.Scan(&r.ID, &r.DocumentID, &r.EntityType, &r.EntityID, &r.Status, &r.StatusDetail,
+			&r.SummaryMD, &r.Conversation, &r.ActionsTaken, &r.ErrorMsg, &r.LLMModel,
+			&r.PromptTokens, &r.CompletionTokens, &r.StartedAt, &r.CompletedAt, &r.CreatedAt, &r.UpdatedAt); err != nil {
+			return nil, err
+		}
+		runs = append(runs, r)
+	}
+	return runs, nil
+}
