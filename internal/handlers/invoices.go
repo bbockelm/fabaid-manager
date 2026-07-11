@@ -108,11 +108,15 @@ func (h *Handler) UpdateInvoice(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusNotFound, "Invoice not found")
 		return
 	}
+	// Payment status is only changed via the approve endpoint (admin/grant_admin),
+	// never through a general edit — preserve it across a PUT.
+	origStatus := existing.Status
 	if err := decodeJSON(r, existing); err != nil {
 		respondError(w, http.StatusBadRequest, "Invalid JSON")
 		return
 	}
 	existing.ID = invoiceID
+	existing.Status = origStatus
 	if err := h.queries.UpdateInvoice(r.Context(), existing); err != nil {
 		log.Error().Err(err).Msg("Failed to update invoice")
 		respondError(w, http.StatusInternalServerError, "Failed to update invoice")
@@ -201,6 +205,83 @@ func (h *Handler) SetInvoiceCoding(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	respondJSON(w, http.StatusOK, map[string]string{"coding_status": body.CodingStatus})
+}
+
+// SetInvoicePaymentStatus approves/updates an invoice's payment status. Gated to
+// admin/grant_admin at the router — subaward admins can code but not approve.
+// PATCH /institution-rates/{entityType}/{entityID}/invoices/{invoiceID}/status
+func (h *Handler) SetInvoicePaymentStatus(w http.ResponseWriter, r *http.Request) {
+	invoiceID := chi.URLParam(r, "invoiceID")
+	var body struct {
+		Status string `json:"status"`
+	}
+	if err := decodeJSON(r, &body); err != nil {
+		respondError(w, http.StatusBadRequest, "Invalid JSON")
+		return
+	}
+	switch body.Status {
+	case "pending", "approved", "rejected", "paid":
+	default:
+		respondError(w, http.StatusBadRequest, "status must be pending, approved, rejected, or paid")
+		return
+	}
+	if err := h.queries.UpdateInvoiceStatus(r.Context(), invoiceID, body.Status); err != nil {
+		respondError(w, http.StatusInternalServerError, "Failed to update payment status")
+		return
+	}
+	respondJSON(w, http.StatusOK, map[string]string{"status": body.Status})
+}
+
+// entityInstitution resolves an entity to its institution name.
+func (h *Handler) entityInstitution(r *http.Request, entityType, entityID string) string {
+	switch entityType {
+	case "grant":
+		if g, err := h.queries.GetGrant(r.Context(), entityID); err == nil {
+			return g.Institution
+		}
+	case "subaward":
+		if s, err := h.queries.GetSubaward(r.Context(), entityID); err == nil {
+			return s.Institution
+		}
+	}
+	return ""
+}
+
+// RequireInvoiceWriteScope restricts invoice mutations for subaward admins to
+// invoices belonging to their permitted institution(s). Reads pass through;
+// admin/grant_admin are unrestricted. (read_only is already blocked upstream.)
+func (h *Handler) RequireInvoiceWriteScope(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet || r.Method == http.MethodHead || r.Method == http.MethodOptions {
+			next.ServeHTTP(w, r)
+			return
+		}
+		session := GetSessionFromContext(r.Context())
+		if session == nil {
+			respondError(w, http.StatusUnauthorized, "Not authenticated")
+			return
+		}
+		if session.Role == RoleAdmin || session.Role == RoleGrantAdmin {
+			next.ServeHTTP(w, r)
+			return
+		}
+		if session.Role == RoleSubawardAdmin {
+			inst := h.entityInstitution(r, chi.URLParam(r, "entityType"), chi.URLParam(r, "entityID"))
+			user := GetUserFromContext(r.Context())
+			if user != nil && inst != "" {
+				permitted, _ := h.queries.ListUserInstitutionNames(r.Context(), user.ID)
+				for _, p := range permitted {
+					if p == inst {
+						next.ServeHTTP(w, r)
+						return
+					}
+				}
+			}
+			respondError(w, http.StatusForbidden, "You can only manage invoices for your own institution")
+			return
+		}
+		respondError(w, http.StatusForbidden, "Insufficient permissions")
+	})
 }
 
 // --- Invoice expense CRUD ---
@@ -390,10 +471,10 @@ func (h *Handler) InvoiceAnalytics(w http.ResponseWriter, r *http.Request) {
 		ExpectedYearEndFunds float64 `json:"expected_year_end_funds"`
 	}
 
-	// Non-capital actuals per entity (for burn).
+	// Non-capital actuals per entity (for burn). Capital == equipment.
 	nonCapByEntity := map[string]float64{}
 	for _, e := range expenses {
-		if !e.IsCapital {
+		if e.LineType != "equipment" {
 			nonCapByEntity[e.EntityType+":"+e.EntityID] += e.Amount
 		}
 	}

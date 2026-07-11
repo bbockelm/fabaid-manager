@@ -204,7 +204,8 @@ func (ic *InvoiceCodingContext) buildSystemPrompt() string {
 	b.WriteString("- wbs_allocations: split the line across WBS areas by percent (may be partial — leave a remainder rather than guessing)\n")
 	b.WriteString("- budget_line_item_id when the line clearly corresponds to a planned budget line\n")
 	b.WriteString("- personnel_id for salary/fringe lines tied to a known person\n")
-	b.WriteString("- is_capital=true for equipment/capital purchases (these are excluded from recurring burn rate)\n\n")
+	b.WriteString("Use line_type='equipment' for capital equipment purchases (these are excluded from recurring burn rate).\n")
+	b.WriteString("Also call set_invoice_details once to record the invoice number, date, and billing period if the document shows them.\n\n")
 	b.WriteString("CRITICAL RULES:\n")
 	b.WriteString("1. You produce a DRAFT proposal only. You CANNOT finalize a coding — a human reviews and finalizes.\n")
 	b.WriteString("2. When you are NOT confident how to categorize a cost, use line_type='uncategorized' and/or omit the WBS allocation. A visible uncategorized amount is far safer than a confident wrong coding.\n")
@@ -254,6 +255,8 @@ func (ic *InvoiceCodingContext) buildUserMessage(extractedMarkdown string) strin
 
 func (ic *InvoiceCodingContext) executeTool(ctx context.Context, name, argsJSON string) (string, error) {
 	switch name {
+	case "set_invoice_details":
+		return ic.toolSetInvoiceDetails(ctx, argsJSON)
 	case "add_expense_line":
 		return ic.toolAddExpenseLine(ctx, argsJSON)
 	case "report_invoice_summary":
@@ -263,12 +266,39 @@ func (ic *InvoiceCodingContext) executeTool(ctx context.Context, name, argsJSON 
 	}
 }
 
+func (ic *InvoiceCodingContext) toolSetInvoiceDetails(ctx context.Context, argsJSON string) (string, error) {
+	var args struct {
+		InvoiceNumber *string `json:"invoice_number"`
+		InvoiceDate   *string `json:"invoice_date"`
+		PeriodStart   *string `json:"period_start"`
+		PeriodEnd     *string `json:"period_end"`
+	}
+	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
+		return "", fmt.Errorf("invalid arguments: %w", err)
+	}
+	if args.InvoiceNumber != nil {
+		ic.invoice.InvoiceNumber = *args.InvoiceNumber
+	}
+	if args.InvoiceDate != nil && *args.InvoiceDate != "" {
+		ic.invoice.InvoiceDate = *args.InvoiceDate
+	}
+	if args.PeriodStart != nil && *args.PeriodStart != "" {
+		ic.invoice.PeriodStart = args.PeriodStart
+	}
+	if args.PeriodEnd != nil && *args.PeriodEnd != "" {
+		ic.invoice.PeriodEnd = args.PeriodEnd
+	}
+	if err := ic.queries.UpdateInvoice(ctx, ic.invoice); err != nil {
+		return "", fmt.Errorf("updating invoice details: %w", err)
+	}
+	return `{"status":"invoice_details_updated"}`, nil
+}
+
 func (ic *InvoiceCodingContext) toolAddExpenseLine(ctx context.Context, argsJSON string) (string, error) {
 	var args struct {
 		LineType         string  `json:"line_type"`
 		Description      string  `json:"description"`
 		Amount           float64 `json:"amount"`
-		IsCapital        bool    `json:"is_capital"`
 		PersonnelID      string  `json:"personnel_id"`
 		BudgetLineItemID string  `json:"budget_line_item_id"`
 		Notes            string  `json:"notes"`
@@ -289,7 +319,6 @@ func (ic *InvoiceCodingContext) toolAddExpenseLine(ctx context.Context, argsJSON
 		LineType:    lineType,
 		Description: args.Description,
 		Amount:      args.Amount,
-		IsCapital:   args.IsCapital,
 		Notes:       args.Notes,
 		SortOrder:   len(ic.actions),
 	}
@@ -352,13 +381,22 @@ func (ic *InvoiceCodingContext) failRun(ctx context.Context, err error) error {
 // Note: there is deliberately no tool to finalize a coding — the agent only drafts.
 func InvoiceCodingTools() []Tool {
 	return []Tool{
+		makeTool("set_invoice_details", "Set the invoice header fields read from the document (invoice number, invoice/received date, and billing period). Call once if the document shows them.", mustJSON(map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"invoice_number": map[string]any{"type": "string", "description": "Invoice number/identifier"},
+				"invoice_date":   map[string]any{"type": "string", "description": "Invoice/received date, YYYY-MM-DD"},
+				"period_start":   map[string]any{"type": "string", "description": "Billing period start, YYYY-MM-DD"},
+				"period_end":     map[string]any{"type": "string", "description": "Billing period end, YYYY-MM-DD"},
+			},
+			"required": []string{},
+		})),
 		makeTool("add_expense_line", "Add one coded expense line to the invoice (draft). Call once per billed line.", mustJSON(map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"line_type":           map[string]any{"type": "string", "enum": expenseCategories, "description": "Budget category; use 'uncategorized' when unsure, 'indirect' for F&A"},
 				"description":         map[string]any{"type": "string", "description": "What this billed line is"},
 				"amount":              map[string]any{"type": "number", "description": "Dollar amount of this line"},
-				"is_capital":          map[string]any{"type": "boolean", "description": "true for equipment/capital purchases"},
 				"personnel_id":        map[string]any{"type": "string", "description": "Personnel UUID for salary/fringe lines (optional)"},
 				"budget_line_item_id": map[string]any{"type": "string", "description": "Planned budget line UUID this matches (optional)"},
 				"notes":               map[string]any{"type": "string", "description": "Optional notes / rationale"},

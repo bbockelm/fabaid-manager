@@ -305,7 +305,6 @@ export interface InvoiceExpense {
   amount: number;
   personnel_id?: string;
   budget_line_item_id?: string;
-  is_capital: boolean;
   notes?: string;
   sort_order: number;
   wbs?: InvoiceExpenseWBS[];
@@ -958,6 +957,11 @@ export const api = {
       }),
     finalizeCoding: (et: string, eid: string, invoiceId: string) =>
       fetchJSON<{ coding_status: string }>(`/institution-rates/${et}/${eid}/invoices/${invoiceId}/finalize-coding`, { method: 'POST' }),
+    // Payment approval — server restricts to admin/grant_admin.
+    setPaymentStatus: (et: string, eid: string, invoiceId: string, status: string) =>
+      fetchJSON<{ status: string }>(`/institution-rates/${et}/${eid}/invoices/${invoiceId}/status`, {
+        method: 'PATCH', body: JSON.stringify({ status }),
+      }),
     setCodingStatus: (et: string, eid: string, invoiceId: string, coding_status: string) =>
       fetchJSON<{ coding_status: string }>(`/institution-rates/${et}/${eid}/invoices/${invoiceId}/coding-status`, {
         method: 'PATCH', body: JSON.stringify({ coding_status }),

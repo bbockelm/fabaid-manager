@@ -147,11 +147,12 @@ type Invoice struct {
 	PeriodEnd     *string   `json:"period_end,omitempty"`
 	Status        string    `json:"status"`        // payment status: pending, approved, rejected, paid
 	CodingStatus  string    `json:"coding_status"` // expense coding: uncoded, draft, final
-	DocumentID    *string   `json:"document_id,omitempty"`
-	FiscalYear    *int      `json:"fiscal_year,omitempty"`
-	Notes         string    `json:"notes,omitempty"`
-	CreatedAt     time.Time `json:"created_at"`
-	UpdatedAt     time.Time `json:"updated_at"`
+	DocumentID    *string    `json:"document_id,omitempty"`
+	FiscalYear    *int       `json:"fiscal_year,omitempty"`
+	Notes         string     `json:"notes,omitempty"`
+	DeletedAt     *time.Time `json:"deleted_at,omitempty"`
+	CreatedAt     time.Time  `json:"created_at"`
+	UpdatedAt     time.Time  `json:"updated_at"`
 }
 
 // InvoiceExpense is one billed line within an invoice, coded to a category and
@@ -164,7 +165,6 @@ type InvoiceExpense struct {
 	Amount           float64   `json:"amount"`
 	PersonnelID      *string   `json:"personnel_id,omitempty"`
 	BudgetLineItemID *string   `json:"budget_line_item_id,omitempty"`
-	IsCapital        bool      `json:"is_capital"`
 	Notes            string    `json:"notes,omitempty"`
 	SortOrder        int       `json:"sort_order"`
 	CreatedAt        time.Time `json:"created_at"`
@@ -199,7 +199,6 @@ type FinalizedExpense struct {
 	EntityID    string   `json:"entity_id"`
 	LineType    string   `json:"line_type"`
 	Amount      float64  `json:"amount"`
-	IsCapital   bool     `json:"is_capital"`
 	InvoiceDate string   `json:"invoice_date"`
 	PeriodEnd   *string  `json:"period_end,omitempty"`
 	// WBS holds this expense's WBS allocations (percent); remainder is uncategorized.
