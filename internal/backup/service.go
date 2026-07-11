@@ -711,6 +711,15 @@ func (s *Service) restoreFromData(ctx context.Context, data []byte, encrypted bo
 			return fmt.Errorf("restoring database: %w", err)
 		}
 		log.Info().Msg("Restore: database dump applied")
+
+		// The dump reflects the source's schema, which may be at an older migration
+		// version than this build's code. Bring it up to date so the restored data
+		// is usable immediately (goose Up is additive — new columns/tables only).
+		log.Info().Msg("Restore: applying pending migrations")
+		if err := db.RunMigrations(s.cfg.DatabaseURL); err != nil {
+			return fmt.Errorf("applying migrations after restore: %w", err)
+		}
+		log.Info().Msg("Restore: migrations applied")
 	}
 
 	return nil
