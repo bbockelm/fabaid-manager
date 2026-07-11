@@ -11,7 +11,7 @@ NSF grant/project tracking web application. Tracks effort/personnel by WBS area,
 | Component | Technology | Notes |
 |-----------|------------|-------|
 | Backend | Go 1.22, chi/v5 router | `cmd/server/main.go` entry point |
-| Database | PostgreSQL 16 | pgx/v5 driver, goose/v3 migrations |
+| Database | PostgreSQL 17 | pgx/v5 driver, goose/v3 migrations |
 | Object Storage | S3 (MinIO for dev) | minio-go/v7; stores invoice PDFs, signed SOWs |
 | Frontend | Next.js 14 (App Router) | React 18, TanStack React Query v5, Tailwind CSS 3 |
 | Dev Environment | VS Code DevContainer | docker-compose: app + postgres + minio |
@@ -80,7 +80,7 @@ Tables: `grants`, `wbs_areas`, `personnel`, `budget_items`, `subawards`, `invoic
 The devcontainer is a **docker-compose stack** (`.devcontainer/docker-compose.yml`), not a single container. Four services on one compose network:
 
 - **`app`** — the dev container you work in (`service: app` in `devcontainer.json`). Go 1.22 + Node 20 + docker-in-docker features.
-- **`db`** — `postgres:16-alpine`, user/pass/db all `fabaid`, with a `pg_isready` healthcheck; `app` waits on `condition: service_healthy`.
+- **`db`** — `postgres:17-alpine` (matches prod; PG17 introduced `transaction_timeout`, which older servers reject on restore), user/pass/db all `fabaid`, with a `pg_isready` healthcheck; `app` waits on `condition: service_healthy`.
 - **`minio`** — `minio/minio:latest`, root user/pass `minioadmin`, API on `:9000`, console on `:9001`.
 - **`minio-init`** — one-shot `minio/mc` job that creates the `fabaid-documents` bucket, then exits.
 
