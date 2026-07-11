@@ -94,6 +94,7 @@ type BudgetLineItem struct {
 	OverheadRateID      *string   `json:"overhead_rate_id,omitempty"`
 	Notes               string    `json:"notes,omitempty"`
 	SortOrder           int       `json:"sort_order"`
+	IsManualOverride    bool      `json:"is_manual_override"`
 	CreatedAt           time.Time `json:"created_at"`
 	UpdatedAt           time.Time `json:"updated_at"`
 }

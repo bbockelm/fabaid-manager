@@ -231,6 +231,7 @@ export interface BudgetLineItem {
   overhead_rate_id?: string | null;
   notes?: string;
   sort_order: number;
+  is_manual_override?: boolean;
   created_at: string;
   updated_at: string;
 }
@@ -586,6 +587,8 @@ export const api = {
         const body = await res.json().catch(() => ({}));
         throw new Error(body.error || `Request failed: ${res.status}`);
       }
+      const body = await res.json().catch(() => ({ warnings: [] }));
+      return { warnings: (body.warnings ?? []) as string[] };
     },
     duplicate: (entityType: string, entityId: string, budgetId: string) =>
       fetchJSON<InstitutionBudget>(`/institution-rates/${entityType}/${entityId}/budgets/${budgetId}/duplicate`, { method: 'POST' }),

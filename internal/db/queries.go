@@ -715,11 +715,11 @@ func (q *Queries) GetBudgetLineItem(ctx context.Context, id string) (*models.Bud
 	err := q.pool.QueryRow(ctx, `
 		SELECT id, institution_budget_id, line_type, COALESCE(description,''),
 		       personnel_id, effort_months, amount, overhead_rate_id,
-		       COALESCE(notes,''), sort_order, created_at, updated_at
+		       COALESCE(notes,''), sort_order, is_manual_override, created_at, updated_at
 		FROM budget_line_items WHERE id=$1`, id).Scan(
 		&b.ID, &b.InstitutionBudgetID, &b.LineType, &b.Description,
 		&b.PersonnelID, &b.EffortMonths, &b.Amount, &b.OverheadRateID,
-		&b.Notes, &b.SortOrder, &b.CreatedAt, &b.UpdatedAt)
+		&b.Notes, &b.SortOrder, &b.IsManualOverride, &b.CreatedAt, &b.UpdatedAt)
 	if err != nil {
 		return nil, fmt.Errorf("getting budget line item: %w", err)
 	}
@@ -730,7 +730,7 @@ func (q *Queries) ListBudgetLineItems(ctx context.Context, budgetID string) ([]m
 	rows, err := q.pool.Query(ctx, `
 		SELECT id, institution_budget_id, line_type, COALESCE(description,''),
 		       personnel_id, effort_months, amount, overhead_rate_id,
-		       COALESCE(notes,''), sort_order, created_at, updated_at
+		       COALESCE(notes,''), sort_order, is_manual_override, created_at, updated_at
 		FROM budget_line_items
 		WHERE institution_budget_id=$1
 		ORDER BY sort_order, created_at`, budgetID)
@@ -744,7 +744,7 @@ func (q *Queries) ListBudgetLineItems(ctx context.Context, budgetID string) ([]m
 		var b models.BudgetLineItem
 		if err := rows.Scan(&b.ID, &b.InstitutionBudgetID, &b.LineType, &b.Description,
 			&b.PersonnelID, &b.EffortMonths, &b.Amount, &b.OverheadRateID,
-			&b.Notes, &b.SortOrder, &b.CreatedAt, &b.UpdatedAt); err != nil {
+			&b.Notes, &b.SortOrder, &b.IsManualOverride, &b.CreatedAt, &b.UpdatedAt); err != nil {
 			return nil, fmt.Errorf("scanning budget line item: %w", err)
 		}
 		items = append(items, b)
@@ -755,11 +755,11 @@ func (q *Queries) ListBudgetLineItems(ctx context.Context, budgetID string) ([]m
 func (q *Queries) CreateBudgetLineItem(ctx context.Context, b *models.BudgetLineItem) error {
 	return q.pool.QueryRow(ctx, `
 		INSERT INTO budget_line_items (institution_budget_id, line_type, description,
-		       personnel_id, effort_months, amount, overhead_rate_id, notes, sort_order)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+		       personnel_id, effort_months, amount, overhead_rate_id, notes, sort_order, is_manual_override)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
 		RETURNING id, created_at, updated_at`,
 		b.InstitutionBudgetID, b.LineType, b.Description,
-		b.PersonnelID, b.EffortMonths, b.Amount, b.OverheadRateID, b.Notes, b.SortOrder,
+		b.PersonnelID, b.EffortMonths, b.Amount, b.OverheadRateID, b.Notes, b.SortOrder, b.IsManualOverride,
 	).Scan(&b.ID, &b.CreatedAt, &b.UpdatedAt)
 }
 
@@ -767,10 +767,10 @@ func (q *Queries) UpdateBudgetLineItem(ctx context.Context, b *models.BudgetLine
 	_, err := q.pool.Exec(ctx, `
 		UPDATE budget_line_items SET line_type=$2, description=$3,
 		       personnel_id=$4, effort_months=$5, amount=$6, overhead_rate_id=$7,
-		       notes=$8, sort_order=$9, updated_at=now()
+		       notes=$8, sort_order=$9, is_manual_override=$10, updated_at=now()
 		WHERE id=$1`,
 		b.ID, b.LineType, b.Description,
-		b.PersonnelID, b.EffortMonths, b.Amount, b.OverheadRateID, b.Notes, b.SortOrder)
+		b.PersonnelID, b.EffortMonths, b.Amount, b.OverheadRateID, b.Notes, b.SortOrder, b.IsManualOverride)
 	return err
 }
 
@@ -967,9 +967,38 @@ func (q *Queries) CreateInstitutionBudget(ctx context.Context, b *models.Institu
 }
 
 // ValidateBudgetForFinalize checks that a budget is ready to finalize.
-// Returns a list of validation error strings. Empty slice means valid.
-func (q *Queries) ValidateBudgetForFinalize(ctx context.Context, budgetID string) ([]string, error) {
+// Returns (blocking errors, non-blocking warnings). Errors prevent finalization;
+// warnings are advisory and do not block (e.g. a salaried person with no fringe line,
+// which is legitimate now that fringe is opt-in).
+func (q *Queries) ValidateBudgetForFinalize(ctx context.Context, budgetID string) ([]string, []string, error) {
 	var errors []string
+	var warnings []string
+
+	// Build a personnel_id -> display name map so validation messages are readable.
+	nameByID := make(map[string]string)
+	nameRows, err := q.pool.Query(ctx, `
+		SELECT DISTINCT p.id, p.name
+		FROM budget_line_items bli
+		JOIN personnel p ON p.id = bli.personnel_id
+		WHERE bli.institution_budget_id=$1 AND bli.personnel_id IS NOT NULL`, budgetID)
+	if err != nil {
+		return nil, nil, fmt.Errorf("loading personnel names: %w", err)
+	}
+	for nameRows.Next() {
+		var id, name string
+		if err := nameRows.Scan(&id, &name); err != nil {
+			nameRows.Close()
+			return nil, nil, err
+		}
+		nameByID[id] = name
+	}
+	nameRows.Close()
+	nameOf := func(pid string) string {
+		if n := nameByID[pid]; n != "" {
+			return n
+		}
+		return pid
+	}
 
 	// 1. Check for personnel lines without matching fringe lines (and vice versa)
 	// Get distinct personnel_ids with salary lines
@@ -977,14 +1006,14 @@ func (q *Queries) ValidateBudgetForFinalize(ctx context.Context, budgetID string
 		SELECT DISTINCT personnel_id FROM budget_line_items
 		WHERE institution_budget_id=$1 AND line_type='personnel' AND personnel_id IS NOT NULL`, budgetID)
 	if err != nil {
-		return nil, fmt.Errorf("checking salary lines: %w", err)
+		return nil, nil, fmt.Errorf("checking salary lines: %w", err)
 	}
 	var salaryPersonIDs []string
 	for salaryRows.Next() {
 		var pid string
 		if err := salaryRows.Scan(&pid); err != nil {
 			salaryRows.Close()
-			return nil, err
+			return nil, nil, err
 		}
 		salaryPersonIDs = append(salaryPersonIDs, pid)
 	}
@@ -994,14 +1023,14 @@ func (q *Queries) ValidateBudgetForFinalize(ctx context.Context, budgetID string
 		SELECT DISTINCT personnel_id FROM budget_line_items
 		WHERE institution_budget_id=$1 AND line_type='fringe' AND personnel_id IS NOT NULL`, budgetID)
 	if err != nil {
-		return nil, fmt.Errorf("checking fringe lines: %w", err)
+		return nil, nil, fmt.Errorf("checking fringe lines: %w", err)
 	}
 	fringeSet := make(map[string]bool)
 	for fringeRows.Next() {
 		var pid string
 		if err := fringeRows.Scan(&pid); err != nil {
 			fringeRows.Close()
-			return nil, err
+			return nil, nil, err
 		}
 		fringeSet[pid] = true
 	}
@@ -1011,12 +1040,13 @@ func (q *Queries) ValidateBudgetForFinalize(ctx context.Context, budgetID string
 	for _, pid := range salaryPersonIDs {
 		salarySet[pid] = true
 		if !fringeSet[pid] {
-			errors = append(errors, fmt.Sprintf("Personnel %s has salary line(s) but no fringe line(s)", pid))
+			// Non-blocking: fringe is opt-in, so a salaried person may legitimately have none.
+			warnings = append(warnings, fmt.Sprintf("%s has salary line(s) but no fringe line(s)", nameOf(pid)))
 		}
 	}
 	for pid := range fringeSet {
 		if !salarySet[pid] {
-			errors = append(errors, fmt.Sprintf("Personnel %s has fringe line(s) but no salary line(s)", pid))
+			errors = append(errors, fmt.Sprintf("%s has fringe line(s) but no salary line(s)", nameOf(pid)))
 		}
 	}
 
@@ -1029,14 +1059,14 @@ func (q *Queries) ValidateBudgetForFinalize(ctx context.Context, budgetID string
 		WHERE li.institution_budget_id=$1
 		GROUP BY li.id, li.description`, budgetID)
 	if err != nil {
-		return nil, fmt.Errorf("checking WBS allocations: %w", err)
+		return nil, nil, fmt.Errorf("checking WBS allocations: %w", err)
 	}
 	for wbsRows.Next() {
 		var id, desc string
 		var totalPct float64
 		if err := wbsRows.Scan(&id, &desc, &totalPct); err != nil {
 			wbsRows.Close()
-			return nil, err
+			return nil, nil, err
 		}
 		if totalPct < 99.99 || totalPct > 100.01 {
 			label := desc
@@ -1048,7 +1078,7 @@ func (q *Queries) ValidateBudgetForFinalize(ctx context.Context, budgetID string
 	}
 	wbsRows.Close()
 
-	return errors, nil
+	return errors, warnings, nil
 }
 
 // FinalizeBudget marks a budget as final (no longer draft).

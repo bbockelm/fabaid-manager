@@ -897,8 +897,8 @@ func (h *Handler) CreateInstitutionBudget(w http.ResponseWriter, r *http.Request
 func (h *Handler) FinalizeBudget(w http.ResponseWriter, r *http.Request) {
 	budgetID := chi.URLParam(r, "budgetID")
 
-	// Validate before finalizing
-	validationErrors, err := h.queries.ValidateBudgetForFinalize(r.Context(), budgetID)
+	// Validate before finalizing. Errors block finalization; warnings are advisory.
+	validationErrors, validationWarnings, err := h.queries.ValidateBudgetForFinalize(r.Context(), budgetID)
 	if err != nil {
 		log.Error().Err(err).Msg("Failed to validate budget for finalization")
 		respondError(w, http.StatusInternalServerError, "Failed to validate budget")
@@ -917,7 +917,10 @@ func (h *Handler) FinalizeBudget(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusInternalServerError, "Failed to finalize budget")
 		return
 	}
-	w.WriteHeader(http.StatusNoContent)
+	// Success — surface any non-blocking warnings so the UI can display them.
+	respondJSON(w, http.StatusOK, map[string]interface{}{
+		"warnings": validationWarnings,
+	})
 }
 
 func (h *Handler) DeleteInstitutionBudget(w http.ResponseWriter, r *http.Request) {
