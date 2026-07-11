@@ -686,8 +686,17 @@ func (s *Service) restoreFromData(ctx context.Context, data []byte, encrypted bo
 
 	// Apply SQL dump
 	if sqlDump != nil {
-		log.Info().Msg("Restore: applying database dump")
-		if err := s.queries.ExecRaw(ctx, sanitizeDumpSQL(string(sqlDump))); err != nil {
+		log.Info().Msg("Restore: resetting schema and applying database dump")
+		// Reset the public schema first so the dump fully defines the target state.
+		// Applying a --clean dump on top of an existing (possibly newer) schema fails
+		// on drop-dependency ordering — e.g. the dump tries to drop wbs_areas' primary
+		// key while a foreign key from a table the older dump doesn't know about (like
+		// invoice_expense_wbs from a later migration) still depends on it. Wiping the
+		// schema first makes the dump's `DROP ... IF EXISTS` statements no-ops and lets
+		// its CREATEs rebuild everything. Prepended in one batch so the restore stays
+		// atomic (ExecRaw runs the whole string in a single implicit transaction).
+		script := "DROP SCHEMA IF EXISTS public CASCADE;\nCREATE SCHEMA public;\n" + sanitizeDumpSQL(string(sqlDump))
+		if err := s.queries.ExecRaw(ctx, script); err != nil {
 			return fmt.Errorf("restoring database: %w", err)
 		}
 		log.Info().Msg("Restore: database dump applied")
