@@ -333,6 +333,34 @@ func (s *Service) CreateBackup(ctx context.Context, initiatedBy string) (*models
 	return backup, nil
 }
 
+// sanitizeDumpSQL removes SET commands for configuration parameters that may not
+// exist on the target server, so a dump taken from a newer PostgreSQL can be
+// restored into an older one. The notable case is transaction_timeout, which
+// pg_dump 17+ emits in the preamble but PostgreSQL 16 and earlier reject with
+// "unrecognized configuration parameter". These are per-session timeouts that are
+// irrelevant to a restore, so dropping them is safe.
+func sanitizeDumpSQL(sql string) string {
+	unknownParams := []string{"transaction_timeout"}
+	var b strings.Builder
+	b.Grow(len(sql))
+	for _, line := range strings.Split(sql, "\n") {
+		low := strings.ToLower(strings.TrimSpace(line))
+		skip := false
+		for _, p := range unknownParams {
+			if strings.HasPrefix(low, "set "+p) {
+				skip = true
+				break
+			}
+		}
+		if skip {
+			continue
+		}
+		b.WriteString(line)
+		b.WriteByte('\n')
+	}
+	return b.String()
+}
+
 func (s *Service) addDatabaseDump(tw *tar.Writer) error {
 	// Use --inserts (not COPY) so the output is pure SQL compatible with pgx Exec.
 	// --clean --if-exists drops existing objects before recreating them so restores
@@ -364,7 +392,9 @@ func (s *Service) addDatabaseDump(tw *tar.Writer) error {
 		filtered.WriteString(line)
 		filtered.WriteByte('\n')
 	}
-	output := filtered.Bytes()
+	// Also drop version-specific session settings (e.g. transaction_timeout, added
+	// in PostgreSQL 17) so backups are portable across major PostgreSQL versions.
+	output := []byte(sanitizeDumpSQL(filtered.String()))
 
 	header := &tar.Header{
 		Name:    "database/fabaid.sql",
@@ -657,7 +687,7 @@ func (s *Service) restoreFromData(ctx context.Context, data []byte, encrypted bo
 	// Apply SQL dump
 	if sqlDump != nil {
 		log.Info().Msg("Restore: applying database dump")
-		if err := s.queries.ExecRaw(ctx, string(sqlDump)); err != nil {
+		if err := s.queries.ExecRaw(ctx, sanitizeDumpSQL(string(sqlDump))); err != nil {
 			return fmt.Errorf("restoring database: %w", err)
 		}
 		log.Info().Msg("Restore: database dump applied")
