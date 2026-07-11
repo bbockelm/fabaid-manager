@@ -333,12 +333,18 @@ func (s *Service) CreateBackup(ctx context.Context, initiatedBy string) (*models
 	return backup, nil
 }
 
-// sanitizeDumpSQL removes SET commands for configuration parameters that may not
-// exist on the target server, so a dump taken from a newer PostgreSQL can be
-// restored into an older one. The notable case is transaction_timeout, which
-// pg_dump 17+ emits in the preamble but PostgreSQL 16 and earlier reject with
-// "unrecognized configuration parameter". These are per-session timeouts that are
-// irrelevant to a restore, so dropping them is safe.
+// sanitizeDumpSQL drops statements from a pg_dump that describe the source
+// server's environment rather than the application's data, so a dump taken from
+// a newer or managed PostgreSQL restores cleanly into the vanilla dev image:
+//
+//   - SET commands for parameters the target may not know (e.g. transaction_timeout,
+//     added in PostgreSQL 17; older servers reject it as "unrecognized configuration
+//     parameter"). These are per-session timeouts, irrelevant to a restore.
+//   - Extension management (CREATE/ALTER/COMMENT ON EXTENSION). Managed Postgres
+//     (RDS/Cloud SQL/etc.) dumps carry server-level extensions such as pgaudit that
+//     aren't available in the plain postgres image ("extension is not available").
+//     This application depends on no extension — it uses only core types and
+//     gen_random_uuid() (built into PostgreSQL 13+) — so dropping these is safe.
 func sanitizeDumpSQL(sql string) string {
 	unknownParams := []string{"transaction_timeout"}
 	var b strings.Builder
@@ -351,6 +357,11 @@ func sanitizeDumpSQL(sql string) string {
 				skip = true
 				break
 			}
+		}
+		if strings.HasPrefix(low, "create extension") ||
+			strings.HasPrefix(low, "comment on extension") ||
+			strings.HasPrefix(low, "alter extension") {
+			skip = true
 		}
 		if skip {
 			continue
