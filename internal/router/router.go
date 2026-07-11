@@ -107,6 +107,10 @@ func New(cfg *config.Config, pool *pgxpool.Pool, store *storage.Store) (*chi.Mux
 					// Budget overview (project-wide summary)
 					r.Get("/budget-overview", h.BudgetOverview)
 
+					// Cross-institution invoice list + expenditure/burn analytics
+					r.Get("/invoices", h.ListGrantInvoices)
+					r.Get("/invoice-analytics", h.InvoiceAnalytics)
+
 					// SOW Config (per-grant)
 					r.Get("/sow-config", h.GetSOWConfig)
 					// Only admin/grant_admin can modify SOW config
@@ -239,6 +243,31 @@ func New(cfg *config.Config, pool *pgxpool.Pool, store *storage.Store) (*chi.Mux
 				// Processing runs for this entity
 				r.Get("/processing-runs", h.ListEntityProcessingRuns)
 				r.Get("/processing-runs/{runID}", h.GetProcessingRun)
+
+				// Invoices + expense coding for this billing entity
+				r.Route("/invoices", func(r chi.Router) {
+					r.Get("/", h.ListEntityInvoices)
+					r.Post("/", h.CreateEntityInvoice)
+					r.Route("/{invoiceID}", func(r chi.Router) {
+						r.Get("/", h.GetInvoiceDetail)
+						r.Put("/", h.UpdateInvoice)
+						r.Delete("/", h.DeleteInvoice)
+						r.Post("/upload", h.UploadEntityInvoiceDoc)
+						r.Post("/code", h.ProcessInvoiceCoding)
+						r.Post("/finalize-coding", h.FinalizeInvoiceCoding)
+						r.Patch("/coding-status", h.SetInvoiceCoding)
+
+						// Expense lines
+						r.Get("/expenses", h.ListInvoiceExpensesHandler)
+						r.Post("/expenses", h.CreateInvoiceExpenseHandler)
+						r.Route("/expenses/{expenseID}", func(r chi.Router) {
+							r.Put("/", h.UpdateInvoiceExpenseHandler)
+							r.Delete("/", h.DeleteInvoiceExpenseHandler)
+							r.Get("/wbs", h.GetInvoiceExpenseWBSHandler)
+							r.Put("/wbs", h.SetInvoiceExpenseWBSHandler)
+						})
+					})
+				})
 			})
 
 			// Legacy download endpoint (creates + downloads in one request)

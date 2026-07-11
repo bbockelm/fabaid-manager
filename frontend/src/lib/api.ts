@@ -275,14 +275,71 @@ export interface Subaward {
 
 export interface Invoice {
   id: string;
-  subaward_id: string;
+  entity_type: string;
+  entity_id: string;
+  subaward_id?: string;
   invoice_number?: string;
   invoice_date: string;
   amount: number;
   period_start?: string;
   period_end?: string;
-  status: string;
+  status: string;         // payment: pending/approved/rejected/paid
+  coding_status: string;  // expense coding: uncoded/draft/final
+  document_id?: string;
+  fiscal_year?: number;
   notes?: string;
+}
+
+export interface InvoiceExpenseWBS {
+  id?: string;
+  invoice_expense_id?: string;
+  wbs_area_id: string;
+  allocation_percent: number;
+}
+
+export interface InvoiceExpense {
+  id: string;
+  invoice_id: string;
+  line_type: string; // includes 'uncategorized' and 'indirect'
+  description?: string;
+  amount: number;
+  personnel_id?: string;
+  budget_line_item_id?: string;
+  is_capital: boolean;
+  notes?: string;
+  sort_order: number;
+  wbs?: InvoiceExpenseWBS[];
+}
+
+export interface InvoiceDetail extends Invoice {
+  expenses: InvoiceExpense[];
+}
+
+export interface BurnRow {
+  entity_type: string;
+  entity_id: string;
+  institution: string;
+  budget: number;
+  actual_total: number;
+  actual_non_capital: number;
+  last_period_end?: string;
+  months_since_last: number;
+  behind: boolean;
+  estimated_monthly: number;
+  projected_since_last: number;
+  projected_to_date: number;
+  expected_remaining: number;
+  expected_year_end_funds: number;
+}
+
+export interface InvoiceAnalytics {
+  total_actual: number;
+  by_wbs: { wbs_area_id: string | null; name: string; amount: number; uncategorized?: boolean }[];
+  by_category: { line_type: string; amount: number; uncategorized?: boolean }[];
+  by_institution: { entity_type: string; entity_id: string; institution: string; amount: number }[];
+  uncategorized: { category: number; wbs: number };
+  behind: { entity_type: string; entity_id: string; institution: string; last_period_end?: string | null; months_since_last?: number | null }[];
+  burn: BurnRow[];
 }
 
 export interface Document {
@@ -427,7 +484,9 @@ export interface SOWLineItemDescription {
 
 export interface DocumentProcessingRun {
   id: string;
-  document_id: string;
+  document_id?: string;
+  invoice_id?: string;
+  run_type?: string; // budget_extraction | invoice_coding
   entity_type: string;
   entity_id: string;
   status: string; // pending, extracting, processing, applying, completed, failed
@@ -868,5 +927,54 @@ export const api = {
       fetchJSON<void>(`/admin/api-keys/${keyId}/revoke`, { method: 'POST' }),
     deleteAPIKey: (keyId: string) =>
       fetchJSON<void>(`/admin/api-keys/${keyId}`, { method: 'DELETE' }),
+  },
+
+  // Entity-scoped invoice coding + expense tracking (entityType: 'grant' | 'subaward')
+  invoiceCoding: {
+    listGrantInvoices: (grantId: string) => fetchJSON<Invoice[]>(`/grants/${grantId}/invoices`),
+    analytics: (grantId: string) => fetchJSON<InvoiceAnalytics>(`/grants/${grantId}/invoice-analytics`),
+
+    list: (et: string, eid: string) => fetchJSON<Invoice[]>(`/institution-rates/${et}/${eid}/invoices`),
+    get: (et: string, eid: string, invoiceId: string) =>
+      fetchJSON<InvoiceDetail>(`/institution-rates/${et}/${eid}/invoices/${invoiceId}`),
+    create: (et: string, eid: string, data: Partial<Invoice>) =>
+      fetchJSON<Invoice>(`/institution-rates/${et}/${eid}/invoices`, { method: 'POST', body: JSON.stringify(data) }),
+    update: (et: string, eid: string, invoiceId: string, data: Partial<Invoice>) =>
+      fetchJSON<Invoice>(`/institution-rates/${et}/${eid}/invoices/${invoiceId}`, { method: 'PUT', body: JSON.stringify(data) }),
+    remove: (et: string, eid: string, invoiceId: string) =>
+      fetchJSON<void>(`/institution-rates/${et}/${eid}/invoices/${invoiceId}`, { method: 'DELETE' }),
+    upload: async (et: string, eid: string, invoiceId: string, file: File) => {
+      const form = new FormData();
+      form.append('file', file);
+      const res = await fetch(`${API_BASE}/institution-rates/${et}/${eid}/invoices/${invoiceId}/upload`, {
+        method: 'POST', body: form, credentials: 'include',
+      });
+      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || `Upload failed: ${res.status}`);
+      return res.json() as Promise<Document>;
+    },
+    code: (et: string, eid: string, invoiceId: string, userPrompt?: string) =>
+      fetchJSON<{ run_id: string; status: string }>(`/institution-rates/${et}/${eid}/invoices/${invoiceId}/code`, {
+        method: 'POST', body: JSON.stringify({ user_prompt: userPrompt || '' }),
+      }),
+    finalizeCoding: (et: string, eid: string, invoiceId: string) =>
+      fetchJSON<{ coding_status: string }>(`/institution-rates/${et}/${eid}/invoices/${invoiceId}/finalize-coding`, { method: 'POST' }),
+    setCodingStatus: (et: string, eid: string, invoiceId: string, coding_status: string) =>
+      fetchJSON<{ coding_status: string }>(`/institution-rates/${et}/${eid}/invoices/${invoiceId}/coding-status`, {
+        method: 'PATCH', body: JSON.stringify({ coding_status }),
+      }),
+
+    // Expense lines
+    createExpense: (et: string, eid: string, invoiceId: string, data: Partial<InvoiceExpense>) =>
+      fetchJSON<InvoiceExpense>(`/institution-rates/${et}/${eid}/invoices/${invoiceId}/expenses`, { method: 'POST', body: JSON.stringify(data) }),
+    updateExpense: (et: string, eid: string, invoiceId: string, expenseId: string, data: Partial<InvoiceExpense>) =>
+      fetchJSON<InvoiceExpense>(`/institution-rates/${et}/${eid}/invoices/${invoiceId}/expenses/${expenseId}`, { method: 'PUT', body: JSON.stringify(data) }),
+    deleteExpense: (et: string, eid: string, invoiceId: string, expenseId: string) =>
+      fetchJSON<void>(`/institution-rates/${et}/${eid}/invoices/${invoiceId}/expenses/${expenseId}`, { method: 'DELETE' }),
+    setExpenseWBS: (et: string, eid: string, invoiceId: string, expenseId: string, allocations: InvoiceExpenseWBS[]) =>
+      fetchJSON<InvoiceExpenseWBS[]>(`/institution-rates/${et}/${eid}/invoices/${invoiceId}/expenses/${expenseId}/wbs`, { method: 'PUT', body: JSON.stringify(allocations) }),
+
+    // AI coding run polling (reuses processing-runs infra)
+    listRuns: (et: string, eid: string) => fetchJSON<DocumentProcessingRun[]>(`/institution-rates/${et}/${eid}/processing-runs`),
+    getRun: (et: string, eid: string, runId: string) => fetchJSON<DocumentProcessingRun>(`/institution-rates/${et}/${eid}/processing-runs/${runId}`),
   },
 };

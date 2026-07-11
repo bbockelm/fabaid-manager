@@ -623,7 +623,10 @@ func (h *Handler) CreateInvoice(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusBadRequest, "Invalid JSON")
 		return
 	}
-	inv.SubawardID = chi.URLParam(r, "subawardID")
+	subawardID := chi.URLParam(r, "subawardID")
+	inv.EntityType = "subaward"
+	inv.EntityID = subawardID
+	inv.SubawardID = &subawardID
 	if inv.Status == "" {
 		inv.Status = "pending"
 	}

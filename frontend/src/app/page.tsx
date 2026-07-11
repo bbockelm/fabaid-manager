@@ -36,6 +36,12 @@ export default function DashboardPage() {
     enabled: !!grantId,
   });
 
+  const { data: invoiceAnalytics } = useQuery({
+    queryKey: ['invoice-analytics', grantId],
+    queryFn: () => api.invoiceCoding.analytics(grantId!),
+    enabled: !!grantId,
+  });
+
   // Budget totals are now derived from institution budgets (versioned)
   // The dashboard shows high-level stats from the grant itself
 
@@ -97,6 +103,31 @@ export default function DashboardPage() {
           color="emerald"
         />
       </div>
+
+      {/* Invoice / expenditure status */}
+      {invoiceAnalytics && (() => {
+        const nBehind = invoiceAnalytics.behind.length;
+        const uncat = (invoiceAnalytics.uncategorized.category ?? 0) + (invoiceAnalytics.uncategorized.wbs ?? 0);
+        if (nBehind === 0 && uncat < 0.5 && invoiceAnalytics.total_actual === 0) return null;
+        return (
+          <div className="flex flex-wrap items-center gap-3 text-sm">
+            <span className="text-gray-500">Invoicing:</span>
+            <span className="px-2.5 py-1 rounded bg-nsf-blue/10 text-nsf-blue">
+              {`$${Math.round(invoiceAnalytics.total_actual).toLocaleString()}`} invoiced (finalized)
+            </span>
+            {nBehind > 0 && (
+              <Link href="/invoices" className="px-2.5 py-1 rounded bg-amber-100 text-amber-800 hover:bg-amber-200">
+                ⚠ {nBehind} institution{nBehind > 1 ? 's' : ''} behind on invoicing
+              </Link>
+            )}
+            {uncat > 0.5 && (
+              <Link href="/invoices" className="px-2.5 py-1 rounded bg-red-100 text-red-700 hover:bg-red-200">
+                ⚠ {`$${Math.round(uncat).toLocaleString()}`} uncategorized
+              </Link>
+            )}
+          </div>
+        );
+      })()}
 
       {/* Quick-nav cards */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">

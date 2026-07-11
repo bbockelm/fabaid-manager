@@ -347,49 +347,7 @@ func (q *Queries) DeleteSubaward(ctx context.Context, id string) error {
 
 // --- Invoices ---
 
-func (q *Queries) ListInvoices(ctx context.Context, subawardID string) ([]models.Invoice, error) {
-	rows, err := q.pool.Query(ctx, `
-		SELECT id, subaward_id, COALESCE(invoice_number, ''), invoice_date::text, amount,
-		       period_start::text, period_end::text, status, COALESCE(notes, ''), created_at, updated_at
-		FROM invoices WHERE subaward_id=$1 ORDER BY invoice_date DESC`, subawardID)
-	if err != nil {
-		return nil, fmt.Errorf("listing invoices: %w", err)
-	}
-	defer rows.Close()
-
-	var invoices []models.Invoice
-	for rows.Next() {
-		var inv models.Invoice
-		var ps, pe string
-		if err := rows.Scan(&inv.ID, &inv.SubawardID, &inv.InvoiceNumber, &inv.InvoiceDate,
-			&inv.Amount, &ps, &pe, &inv.Status, &inv.Notes, &inv.CreatedAt, &inv.UpdatedAt); err != nil {
-			return nil, fmt.Errorf("scanning invoice: %w", err)
-		}
-		if ps != "" {
-			inv.PeriodStart = &ps
-		}
-		if pe != "" {
-			inv.PeriodEnd = &pe
-		}
-		invoices = append(invoices, inv)
-	}
-	return invoices, nil
-}
-
-func (q *Queries) CreateInvoice(ctx context.Context, inv *models.Invoice) error {
-	return q.pool.QueryRow(ctx, `
-		INSERT INTO invoices (subaward_id, invoice_number, invoice_date, amount, period_start, period_end, status, notes)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-		RETURNING id, created_at, updated_at`,
-		inv.SubawardID, inv.InvoiceNumber, inv.InvoiceDate, inv.Amount,
-		inv.PeriodStart, inv.PeriodEnd, inv.Status, inv.Notes,
-	).Scan(&inv.ID, &inv.CreatedAt, &inv.UpdatedAt)
-}
-
-func (q *Queries) UpdateInvoiceStatus(ctx context.Context, id, status string) error {
-	_, err := q.pool.Exec(ctx, `UPDATE invoices SET status=$2, updated_at=now() WHERE id=$1`, id, status)
-	return err
-}
+// Invoice, invoice-expense, and expense-analytics queries live in expense_queries.go.
 
 // --- Personnel ---
 
@@ -2202,14 +2160,22 @@ func (q *Queries) BudgetOverheadBasesFiltered(ctx context.Context, grantID strin
 
 // --- Document Processing Runs ---
 
+// defaultRunType falls back to budget extraction when a run type is unset.
+func defaultRunType(rt string) string {
+	if rt == "" {
+		return "budget_extraction"
+	}
+	return rt
+}
+
 // CreateDocumentProcessingRun inserts a new processing-run record and fills in the generated ID.
 func (q *Queries) CreateDocumentProcessingRun(ctx context.Context, r *models.DocumentProcessingRun) error {
 	return q.pool.QueryRow(ctx, `
 		INSERT INTO document_processing_runs
-			(document_id, entity_type, entity_id, status, status_detail, llm_model)
-		VALUES ($1, $2, $3, $4, $5, $6)
+			(document_id, invoice_id, run_type, entity_type, entity_id, status, status_detail, llm_model)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 		RETURNING id, created_at, updated_at`,
-		r.DocumentID, r.EntityType, r.EntityID, r.Status, r.StatusDetail, r.LLMModel,
+		r.DocumentID, r.InvoiceID, defaultRunType(r.RunType), r.EntityType, r.EntityID, r.Status, r.StatusDetail, r.LLMModel,
 	).Scan(&r.ID, &r.CreatedAt, &r.UpdatedAt)
 }
 
@@ -2258,11 +2224,11 @@ func (q *Queries) FailStaleProcessingRuns(ctx context.Context) (int64, error) {
 func (q *Queries) GetDocumentProcessingRun(ctx context.Context, id string) (*models.DocumentProcessingRun, error) {
 	var r models.DocumentProcessingRun
 	err := q.pool.QueryRow(ctx, `
-		SELECT id, document_id, entity_type, entity_id, status, status_detail,
+		SELECT id, document_id, invoice_id, run_type, entity_type, entity_id, status, status_detail,
 			summary_md, conversation, actions_taken, error_msg, llm_model,
 			prompt_tokens, completion_tokens, started_at, completed_at, created_at, updated_at
 		FROM document_processing_runs WHERE id=$1`, id,
-	).Scan(&r.ID, &r.DocumentID, &r.EntityType, &r.EntityID, &r.Status, &r.StatusDetail,
+	).Scan(&r.ID, &r.DocumentID, &r.InvoiceID, &r.RunType, &r.EntityType, &r.EntityID, &r.Status, &r.StatusDetail,
 		&r.SummaryMD, &r.Conversation, &r.ActionsTaken, &r.ErrorMsg, &r.LLMModel,
 		&r.PromptTokens, &r.CompletionTokens, &r.StartedAt, &r.CompletedAt, &r.CreatedAt, &r.UpdatedAt)
 	if err != nil {
@@ -2274,7 +2240,7 @@ func (q *Queries) GetDocumentProcessingRun(ctx context.Context, id string) (*mod
 // ListDocumentProcessingRuns returns all runs for a given document.
 func (q *Queries) ListDocumentProcessingRuns(ctx context.Context, documentID string) ([]models.DocumentProcessingRun, error) {
 	rows, err := q.pool.Query(ctx, `
-		SELECT id, document_id, entity_type, entity_id, status, status_detail,
+		SELECT id, document_id, invoice_id, run_type, entity_type, entity_id, status, status_detail,
 			summary_md, conversation, actions_taken, error_msg, llm_model,
 			prompt_tokens, completion_tokens, started_at, completed_at, created_at, updated_at
 		FROM document_processing_runs WHERE document_id=$1
@@ -2287,7 +2253,7 @@ func (q *Queries) ListDocumentProcessingRuns(ctx context.Context, documentID str
 	var runs []models.DocumentProcessingRun
 	for rows.Next() {
 		var r models.DocumentProcessingRun
-		if err := rows.Scan(&r.ID, &r.DocumentID, &r.EntityType, &r.EntityID, &r.Status, &r.StatusDetail,
+		if err := rows.Scan(&r.ID, &r.DocumentID, &r.InvoiceID, &r.RunType, &r.EntityType, &r.EntityID, &r.Status, &r.StatusDetail,
 			&r.SummaryMD, &r.Conversation, &r.ActionsTaken, &r.ErrorMsg, &r.LLMModel,
 			&r.PromptTokens, &r.CompletionTokens, &r.StartedAt, &r.CompletedAt, &r.CreatedAt, &r.UpdatedAt); err != nil {
 			return nil, err
@@ -2300,7 +2266,7 @@ func (q *Queries) ListDocumentProcessingRuns(ctx context.Context, documentID str
 // ListDocumentProcessingRunsByEntity returns all runs for an institution entity.
 func (q *Queries) ListDocumentProcessingRunsByEntity(ctx context.Context, entityType, entityID string) ([]models.DocumentProcessingRun, error) {
 	rows, err := q.pool.Query(ctx, `
-		SELECT id, document_id, entity_type, entity_id, status, status_detail,
+		SELECT id, document_id, invoice_id, run_type, entity_type, entity_id, status, status_detail,
 			summary_md, conversation, actions_taken, error_msg, llm_model,
 			prompt_tokens, completion_tokens, started_at, completed_at, created_at, updated_at
 		FROM document_processing_runs WHERE entity_type=$1 AND entity_id=$2
@@ -2313,7 +2279,7 @@ func (q *Queries) ListDocumentProcessingRunsByEntity(ctx context.Context, entity
 	var runs []models.DocumentProcessingRun
 	for rows.Next() {
 		var r models.DocumentProcessingRun
-		if err := rows.Scan(&r.ID, &r.DocumentID, &r.EntityType, &r.EntityID, &r.Status, &r.StatusDetail,
+		if err := rows.Scan(&r.ID, &r.DocumentID, &r.InvoiceID, &r.RunType, &r.EntityType, &r.EntityID, &r.Status, &r.StatusDetail,
 			&r.SummaryMD, &r.Conversation, &r.ActionsTaken, &r.ErrorMsg, &r.LLMModel,
 			&r.PromptTokens, &r.CompletionTokens, &r.StartedAt, &r.CompletedAt, &r.CreatedAt, &r.UpdatedAt); err != nil {
 			return nil, err
