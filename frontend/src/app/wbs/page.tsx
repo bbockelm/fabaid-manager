@@ -728,16 +728,25 @@ export default function WBSPage() {
       {/* ---- Effort tab ---- */}
       {tab === 'effort' && (
         <div className="space-y-3">
-          {allInstitutions.length > 1 && (
-            <div className="flex items-center gap-2">
-              <span className="text-sm text-gray-600">Filter:</span>
-              <InstitutionFilter
-                allInstitutions={allInstitutions}
-                selected={effortInstitutions}
-                onChange={setEffortInstitutions}
-              />
+          <div className="flex items-center justify-between gap-2 flex-wrap">
+            {allInstitutions.length > 1 ? (
+              <div className="flex items-center gap-2">
+                <span className="text-sm text-gray-600">Filter:</span>
+                <InstitutionFilter
+                  allInstitutions={allInstitutions}
+                  selected={effortInstitutions}
+                  onChange={setEffortInstitutions}
+                />
+              </div>
+            ) : <span />}
+            <div className="flex items-center gap-2 text-sm">
+              <span className="text-gray-500">Export:</span>
+              <a href={api.wbs.effortSummaryExportUrl(grantId!, 'csv', effortInstitutions.length > 0 ? effortInstitutions : undefined)}
+                className="px-2.5 py-1 border rounded hover:bg-gray-50">CSV</a>
+              <a href={api.wbs.effortSummaryExportUrl(grantId!, 'md', effortInstitutions.length > 0 ? effortInstitutions : undefined)}
+                className="px-2.5 py-1 border rounded hover:bg-gray-50">Markdown</a>
             </div>
-          )}
+          </div>
           <EffortSummaryTable
             summaries={effortSummary ?? []}
             areas={areas ?? []}

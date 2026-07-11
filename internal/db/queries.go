@@ -599,6 +599,14 @@ func (q *Queries) UpdateStatementOfWork(ctx context.Context, s *models.Statement
 	return err
 }
 
+// SetSOWSignedDoc links an uploaded signed document to a SOW and marks it signed.
+func (q *Queries) SetSOWSignedDoc(ctx context.Context, sowID, docID string) error {
+	_, err := q.pool.Exec(ctx, `
+		UPDATE statements_of_work SET signed_doc_id=$2, status='signed', updated_at=now()
+		WHERE id=$1`, sowID, docID)
+	return err
+}
+
 func (q *Queries) DeleteStatementOfWork(ctx context.Context, id string) error {
 	_, err := q.pool.Exec(ctx, `DELETE FROM statements_of_work WHERE id = $1`, id)
 	return err

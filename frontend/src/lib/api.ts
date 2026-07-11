@@ -555,6 +555,11 @@ export const api = {
         : '';
       return fetchJSON<WBSEffortSummary[]>(`/grants/${grantId}/wbs/effort-summary${params}`);
     },
+    // Download URL for the effort/cost breakdown as 'csv' or 'md' (same-origin, uses the session cookie).
+    effortSummaryExportUrl: (grantId: string, format: 'csv' | 'md', institutions?: string[]) => {
+      const inst = institutions?.length ? `&institutions=${institutions.map(encodeURIComponent).join(',')}` : '';
+      return `${API_BASE}/grants/${grantId}/wbs/effort-summary?format=${format}${inst}`;
+    },
   },
 
   personnel: {

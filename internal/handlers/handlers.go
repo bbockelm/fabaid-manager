@@ -236,6 +236,16 @@ func (h *Handler) WBSEffortSummary(w http.ResponseWriter, r *http.Request) {
 	if summaries == nil {
 		summaries = []models.WBSEffortSummary{}
 	}
+
+	// Optional export formats for embedding the breakdown in other documents.
+	switch r.URL.Query().Get("format") {
+	case "csv":
+		writeWBSSummaryCSV(w, summaries)
+		return
+	case "md", "markdown":
+		writeWBSSummaryMarkdown(w, summaries)
+		return
+	}
 	respondJSON(w, http.StatusOK, summaries)
 }
 
@@ -662,28 +672,48 @@ func (h *Handler) UploadInvoiceDocument(w http.ResponseWriter, r *http.Request) 
 	h.uploadDocument(w, r, "invoice", invoiceID)
 }
 
+// UploadSignedSOW stores the signed SOW document and associates it with the SOW
+// (sets signed_doc_id and marks the SOW 'signed').
 func (h *Handler) UploadSignedSOW(w http.ResponseWriter, r *http.Request) {
 	sowID := chi.URLParam(r, "sowID")
-	h.uploadDocument(w, r, "statement_of_work", sowID)
+	doc, code, msg := h.storeUploadedDocument(r, "statement_of_work", sowID)
+	if code != 0 {
+		respondError(w, code, msg)
+		return
+	}
+	if err := h.queries.SetSOWSignedDoc(r.Context(), sowID, doc.ID); err != nil {
+		log.Error().Err(err).Msg("Failed to associate signed SOW document")
+		respondError(w, http.StatusInternalServerError, "Uploaded but failed to associate with the SOW")
+		return
+	}
+	respondJSON(w, http.StatusCreated, doc)
 }
 
 func (h *Handler) uploadDocument(w http.ResponseWriter, r *http.Request, entityType, entityID string) {
+	doc, code, msg := h.storeUploadedDocument(r, entityType, entityID)
+	if code != 0 {
+		respondError(w, code, msg)
+		return
+	}
+	respondJSON(w, http.StatusCreated, doc)
+}
+
+// storeUploadedDocument reads the multipart "file", uploads it to S3, and records
+// it in the documents table. Returns (doc, 0, "") on success or (nil, httpCode, msg).
+func (h *Handler) storeUploadedDocument(r *http.Request, entityType, entityID string) (*models.Document, int, string) {
 	// Max 50MB
 	r.ParseMultipartForm(50 << 20)
 
 	file, header, err := r.FormFile("file")
 	if err != nil {
-		respondError(w, http.StatusBadRequest, "No file provided")
-		return
+		return nil, http.StatusBadRequest, "No file provided"
 	}
 	defer file.Close()
 
 	s3Key := storage.GenerateKey(entityType, entityID, header.Filename)
-
 	if err := h.store.Upload(r.Context(), s3Key, file, header.Size, header.Header.Get("Content-Type")); err != nil {
 		log.Error().Err(err).Msg("Failed to upload file")
-		respondError(w, http.StatusInternalServerError, "Failed to upload file")
-		return
+		return nil, http.StatusInternalServerError, "Failed to upload file"
 	}
 
 	contentType := header.Header.Get("Content-Type")
@@ -691,7 +721,7 @@ func (h *Handler) uploadDocument(w http.ResponseWriter, r *http.Request, entityT
 		contentType = "application/pdf"
 	}
 
-	doc := models.Document{
+	doc := &models.Document{
 		EntityType:  entityType,
 		EntityID:    entityID,
 		Filename:    header.Filename,
@@ -699,14 +729,11 @@ func (h *Handler) uploadDocument(w http.ResponseWriter, r *http.Request, entityT
 		S3Key:       s3Key,
 		FileSize:    header.Size,
 	}
-
-	if err := h.queries.CreateDocument(r.Context(), &doc); err != nil {
+	if err := h.queries.CreateDocument(r.Context(), doc); err != nil {
 		log.Error().Err(err).Msg("Failed to save document record")
-		respondError(w, http.StatusInternalServerError, "Failed to save document record")
-		return
+		return nil, http.StatusInternalServerError, "Failed to save document record"
 	}
-
-	respondJSON(w, http.StatusCreated, doc)
+	return doc, 0, ""
 }
 
 func (h *Handler) GetDocument(w http.ResponseWriter, r *http.Request) {
