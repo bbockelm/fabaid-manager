@@ -333,6 +333,45 @@ func (s *Service) CreateBackup(ctx context.Context, initiatedBy string) (*models
 	return backup, nil
 }
 
+// sanitizeDumpSQL drops statements from a pg_dump that describe the source
+// server's environment rather than the application's data, so a dump taken from
+// a newer or managed PostgreSQL restores cleanly into the vanilla dev image:
+//
+//   - SET commands for parameters the target may not know (e.g. transaction_timeout,
+//     added in PostgreSQL 17; older servers reject it as "unrecognized configuration
+//     parameter"). These are per-session timeouts, irrelevant to a restore.
+//   - Extension management (CREATE/ALTER/COMMENT ON EXTENSION). Managed Postgres
+//     (RDS/Cloud SQL/etc.) dumps carry server-level extensions such as pgaudit that
+//     aren't available in the plain postgres image ("extension is not available").
+//     This application depends on no extension — it uses only core types and
+//     gen_random_uuid() (built into PostgreSQL 13+) — so dropping these is safe.
+func sanitizeDumpSQL(sql string) string {
+	unknownParams := []string{"transaction_timeout"}
+	var b strings.Builder
+	b.Grow(len(sql))
+	for _, line := range strings.Split(sql, "\n") {
+		low := strings.ToLower(strings.TrimSpace(line))
+		skip := false
+		for _, p := range unknownParams {
+			if strings.HasPrefix(low, "set "+p) {
+				skip = true
+				break
+			}
+		}
+		if strings.HasPrefix(low, "create extension") ||
+			strings.HasPrefix(low, "comment on extension") ||
+			strings.HasPrefix(low, "alter extension") {
+			skip = true
+		}
+		if skip {
+			continue
+		}
+		b.WriteString(line)
+		b.WriteByte('\n')
+	}
+	return b.String()
+}
+
 func (s *Service) addDatabaseDump(tw *tar.Writer) error {
 	// Use --inserts (not COPY) so the output is pure SQL compatible with pgx Exec.
 	// --clean --if-exists drops existing objects before recreating them so restores
@@ -364,7 +403,9 @@ func (s *Service) addDatabaseDump(tw *tar.Writer) error {
 		filtered.WriteString(line)
 		filtered.WriteByte('\n')
 	}
-	output := filtered.Bytes()
+	// Also drop version-specific session settings (e.g. transaction_timeout, added
+	// in PostgreSQL 17) so backups are portable across major PostgreSQL versions.
+	output := []byte(sanitizeDumpSQL(filtered.String()))
 
 	header := &tar.Header{
 		Name:    "database/fabaid.sql",
@@ -656,11 +697,29 @@ func (s *Service) restoreFromData(ctx context.Context, data []byte, encrypted bo
 
 	// Apply SQL dump
 	if sqlDump != nil {
-		log.Info().Msg("Restore: applying database dump")
-		if err := s.queries.ExecRaw(ctx, string(sqlDump)); err != nil {
+		log.Info().Msg("Restore: resetting schema and applying database dump")
+		// Reset the public schema first so the dump fully defines the target state.
+		// Applying a --clean dump on top of an existing (possibly newer) schema fails
+		// on drop-dependency ordering — e.g. the dump tries to drop wbs_areas' primary
+		// key while a foreign key from a table the older dump doesn't know about (like
+		// invoice_expense_wbs from a later migration) still depends on it. Wiping the
+		// schema first makes the dump's `DROP ... IF EXISTS` statements no-ops and lets
+		// its CREATEs rebuild everything. Prepended in one batch so the restore stays
+		// atomic (ExecRaw runs the whole string in a single implicit transaction).
+		script := "DROP SCHEMA IF EXISTS public CASCADE;\nCREATE SCHEMA public;\n" + sanitizeDumpSQL(string(sqlDump))
+		if err := s.queries.ExecRaw(ctx, script); err != nil {
 			return fmt.Errorf("restoring database: %w", err)
 		}
 		log.Info().Msg("Restore: database dump applied")
+
+		// The dump reflects the source's schema, which may be at an older migration
+		// version than this build's code. Bring it up to date so the restored data
+		// is usable immediately (goose Up is additive — new columns/tables only).
+		log.Info().Msg("Restore: applying pending migrations")
+		if err := db.RunMigrations(s.cfg.DatabaseURL); err != nil {
+			return fmt.Errorf("applying migrations after restore: %w", err)
+		}
+		log.Info().Msg("Restore: migrations applied")
 	}
 
 	return nil

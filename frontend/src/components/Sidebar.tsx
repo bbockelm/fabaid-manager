@@ -12,6 +12,7 @@ const navItems = [
   { label: 'Budget Overview', href: '/budget-overview', icon: '📈' },
   { label: 'Detailed Budget', href: '/budget', icon: '💰' },
   { label: 'Documents', href: '/documents', icon: '📄' },
+  { label: 'Invoices', href: '/invoices', icon: '🧾' },
   { label: 'Statements of Work', href: '/sow', icon: '📋' },
   { label: 'Settings', href: '/settings', icon: '⚙️', hideForSubawardAdmin: true },
   { label: 'Backup', href: '/backup', icon: '💾', hideForSubawardAdmin: true },

@@ -940,7 +940,7 @@ applicable indirect costs.</p>
 </table>
 
 <p>Changes to the names of funded personnel, including initial names for effort labeled TBN in this
-SOW, or to the effort levels foreseen above should be reported to the Project Director
+SOW, or to the effort levels foreseen above should be reported to the Principal Investigator
 and as part of monthly and/or quarterly reports.</p>
 
 <h2>3&nbsp;&nbsp;&nbsp;Description of Work</h2>

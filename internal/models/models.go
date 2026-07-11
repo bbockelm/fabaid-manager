@@ -94,6 +94,7 @@ type BudgetLineItem struct {
 	OverheadRateID      *string   `json:"overhead_rate_id,omitempty"`
 	Notes               string    `json:"notes,omitempty"`
 	SortOrder           int       `json:"sort_order"`
+	IsManualOverride    bool      `json:"is_manual_override"`
 	CreatedAt           time.Time `json:"created_at"`
 	UpdatedAt           time.Time `json:"updated_at"`
 }
@@ -133,19 +134,75 @@ type Subaward struct {
 	UpdatedAt            time.Time `json:"updated_at"`
 }
 
-// Invoice represents an invoice from a subawardee.
+// Invoice represents an invoice from a billing institution (lead grant or subaward).
 type Invoice struct {
 	ID            string    `json:"id"`
-	SubawardID    string    `json:"subaward_id"`
+	EntityType    string    `json:"entity_type"` // 'grant' or 'subaward'
+	EntityID      string    `json:"entity_id"`
+	SubawardID    *string   `json:"subaward_id,omitempty"` // legacy; set when entity_type='subaward'
 	InvoiceNumber string    `json:"invoice_number,omitempty"`
 	InvoiceDate   string    `json:"invoice_date"`
 	Amount        float64   `json:"amount"`
 	PeriodStart   *string   `json:"period_start,omitempty"`
 	PeriodEnd     *string   `json:"period_end,omitempty"`
-	Status        string    `json:"status"`
-	Notes         string    `json:"notes,omitempty"`
-	CreatedAt     time.Time `json:"created_at"`
-	UpdatedAt     time.Time `json:"updated_at"`
+	Status        string    `json:"status"`        // payment status: pending, approved, rejected, paid
+	CodingStatus  string    `json:"coding_status"` // expense coding: uncoded, draft, final
+	DocumentID    *string    `json:"document_id,omitempty"`
+	FiscalYear    *int       `json:"fiscal_year,omitempty"`
+	Notes         string     `json:"notes,omitempty"`
+	DeletedAt     *time.Time `json:"deleted_at,omitempty"`
+	CreatedAt     time.Time  `json:"created_at"`
+	UpdatedAt     time.Time  `json:"updated_at"`
+}
+
+// InvoiceExpense is one billed line within an invoice, coded to a category and
+// (via InvoiceExpenseWBS) split across WBS areas. line_type may be 'uncategorized'.
+type InvoiceExpense struct {
+	ID               string    `json:"id"`
+	InvoiceID        string    `json:"invoice_id"`
+	LineType         string    `json:"line_type"`
+	Description      string    `json:"description,omitempty"`
+	Amount           float64   `json:"amount"`
+	PersonnelID      *string   `json:"personnel_id,omitempty"`
+	BudgetLineItemID *string   `json:"budget_line_item_id,omitempty"`
+	Notes            string    `json:"notes,omitempty"`
+	SortOrder        int       `json:"sort_order"`
+	CreatedAt        time.Time `json:"created_at"`
+	UpdatedAt        time.Time `json:"updated_at"`
+}
+
+// InvoiceExpenseWBS tracks a WBS cost allocation for an invoice expense line.
+// Allocations are NOT required to sum to 100%; any remainder is WBS-uncategorized.
+type InvoiceExpenseWBS struct {
+	ID                string  `json:"id"`
+	InvoiceExpenseID  string  `json:"invoice_expense_id"`
+	WBSAreaID         string  `json:"wbs_area_id"`
+	AllocationPercent float64 `json:"allocation_percent"`
+}
+
+// BillingEntity is an institution that submits invoices against the grant:
+// the lead grant itself, or a subaward. TotalBudget is used as the burn-rate denominator.
+type BillingEntity struct {
+	EntityType  string  `json:"entity_type"`
+	EntityID    string  `json:"entity_id"`
+	Institution string  `json:"institution"`
+	TotalBudget float64 `json:"total_budget"`
+	StartDate   string  `json:"start_date,omitempty"`
+	EndDate     string  `json:"end_date,omitempty"`
+}
+
+// FinalizedExpense is a flattened finalized invoice expense used for actuals/burn rollups.
+type FinalizedExpense struct {
+	ExpenseID   string   `json:"expense_id"`
+	InvoiceID   string   `json:"invoice_id"`
+	EntityType  string   `json:"entity_type"`
+	EntityID    string   `json:"entity_id"`
+	LineType    string   `json:"line_type"`
+	Amount      float64  `json:"amount"`
+	InvoiceDate string   `json:"invoice_date"`
+	PeriodEnd   *string  `json:"period_end,omitempty"`
+	// WBS holds this expense's WBS allocations (percent); remainder is uncategorized.
+	WBS []InvoiceExpenseWBS `json:"wbs,omitempty"`
 }
 
 // Document represents a file stored in S3.
@@ -482,7 +539,9 @@ type OverheadBaseRow struct {
 // DocumentProcessingRun records an AI processing run on an uploaded budget document.
 type DocumentProcessingRun struct {
 	ID               string     `json:"id"`
-	DocumentID       string     `json:"document_id"`
+	DocumentID       *string    `json:"document_id,omitempty"`
+	InvoiceID        *string    `json:"invoice_id,omitempty"`
+	RunType          string     `json:"run_type"` // budget_extraction | invoice_coding
 	EntityType       string     `json:"entity_type"`
 	EntityID         string     `json:"entity_id"`
 	Status           string     `json:"status"`        // pending, extracting, processing, applying, completed, failed

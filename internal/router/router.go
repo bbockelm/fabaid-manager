@@ -107,6 +107,10 @@ func New(cfg *config.Config, pool *pgxpool.Pool, store *storage.Store) (*chi.Mux
 					// Budget overview (project-wide summary)
 					r.Get("/budget-overview", h.BudgetOverview)
 
+					// Cross-institution invoice list + expenditure/burn analytics
+					r.Get("/invoices", h.ListGrantInvoices)
+					r.Get("/invoice-analytics", h.InvoiceAnalytics)
+
 					// SOW Config (per-grant)
 					r.Get("/sow-config", h.GetSOWConfig)
 					// Only admin/grant_admin can modify SOW config
@@ -147,11 +151,14 @@ func New(cfg *config.Config, pool *pgxpool.Pool, store *storage.Store) (*chi.Mux
 							r.Put("/", h.UpdateSubaward)
 							r.Delete("/", h.DeleteSubaward)
 
-							// Invoices
+							// Invoices (legacy subaward-scoped). Approving is admin/grant_admin only.
 							r.Route("/invoices", func(r chi.Router) {
 								r.Get("/", h.ListInvoices)
 								r.Post("/", h.CreateInvoice)
-								r.Patch("/{invoiceID}/status", h.UpdateInvoiceStatus)
+								r.Group(func(r chi.Router) {
+									r.Use(handlers.RequireRole(handlers.RoleAdmin, handlers.RoleGrantAdmin))
+									r.Patch("/{invoiceID}/status", h.UpdateInvoiceStatus)
+								})
 							})
 
 							// Upload invoice PDF
@@ -239,6 +246,39 @@ func New(cfg *config.Config, pool *pgxpool.Pool, store *storage.Store) (*chi.Mux
 				// Processing runs for this entity
 				r.Get("/processing-runs", h.ListEntityProcessingRuns)
 				r.Get("/processing-runs/{runID}", h.GetProcessingRun)
+
+				// Invoices + expense coding for this billing entity.
+				// Subaward admins may upload/code invoices for their own institution;
+				// approving payment (below) is restricted to admin/grant_admin.
+				r.Route("/invoices", func(r chi.Router) {
+					r.Use(h.RequireInvoiceWriteScope)
+					r.Get("/", h.ListEntityInvoices)
+					r.Post("/", h.CreateEntityInvoice)
+					r.Route("/{invoiceID}", func(r chi.Router) {
+						r.Get("/", h.GetInvoiceDetail)
+						r.Put("/", h.UpdateInvoice)
+						r.Delete("/", h.DeleteInvoice)
+						r.Post("/upload", h.UploadEntityInvoiceDoc)
+						r.Post("/code", h.ProcessInvoiceCoding)
+						r.Post("/finalize-coding", h.FinalizeInvoiceCoding)
+						r.Patch("/coding-status", h.SetInvoiceCoding)
+						// Approve / set payment status — admin or grant_admin only.
+						r.Group(func(r chi.Router) {
+							r.Use(handlers.RequireRole(handlers.RoleAdmin, handlers.RoleGrantAdmin))
+							r.Patch("/status", h.SetInvoicePaymentStatus)
+						})
+
+						// Expense lines
+						r.Get("/expenses", h.ListInvoiceExpensesHandler)
+						r.Post("/expenses", h.CreateInvoiceExpenseHandler)
+						r.Route("/expenses/{expenseID}", func(r chi.Router) {
+							r.Put("/", h.UpdateInvoiceExpenseHandler)
+							r.Delete("/", h.DeleteInvoiceExpenseHandler)
+							r.Get("/wbs", h.GetInvoiceExpenseWBSHandler)
+							r.Put("/wbs", h.SetInvoiceExpenseWBSHandler)
+						})
+					})
+				})
 			})
 
 			// Legacy download endpoint (creates + downloads in one request)

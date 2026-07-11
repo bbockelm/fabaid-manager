@@ -1,6 +1,6 @@
 # Agent Notes — FabAID Manager
 
-Last updated: 2026-03-05
+Last updated: 2026-07-11
 
 ## Project Purpose
 
@@ -11,7 +11,7 @@ NSF grant/project tracking web application. Tracks effort/personnel by WBS area,
 | Component | Technology | Notes |
 |-----------|------------|-------|
 | Backend | Go 1.22, chi/v5 router | `cmd/server/main.go` entry point |
-| Database | PostgreSQL 16 | pgx/v5 driver, goose/v3 migrations |
+| Database | PostgreSQL 17 | pgx/v5 driver, goose/v3 migrations |
 | Object Storage | S3 (MinIO for dev) | minio-go/v7; stores invoice PDFs, signed SOWs |
 | Frontend | Next.js 14 (App Router) | React 18, TanStack React Query v5, Tailwind CSS 3 |
 | Dev Environment | VS Code DevContainer | docker-compose: app + postgres + minio |
@@ -72,8 +72,27 @@ Tables: `grants`, `wbs_areas`, `personnel`, `budget_items`, `subawards`, `invoic
 - **API proxy**: Next.js `next.config.js` rewrites `/api/*` → `http://localhost:8080/api/*` in dev.
 - **CORS**: Allows `localhost:3000` and `localhost:8080` in dev (see `router.go`).
 - **Embedded frontend**: Production builds use `-tags embed_frontend` to embed the Next.js static export (`output: 'export'`) into the Go binary. The Go server serves the SPA for all non-API routes via `internal/frontend/handler.go`. In dev, the frontend is NOT embedded; the separate Next.js dev server handles it.
-- **Embedded migrations**: DB migrations are embedded via `//go:embed` in `internal/db/migrations_embed.go`, so the binary is fully self-contained.
+- **Embedded migrations**: DB migrations are embedded via `//go:embed migrations/*.sql` in `internal/db/migrations_embed.go` (`MigrationsFS`) and applied by `db.RunMigrations` (`internal/db/migrate.go`), which is called at server startup from `cmd/server/main.go`. **goose is built into the binary — do NOT run standalone goose.** Just starting the server (`make dev-backend` / running the built binary) applies all pending migrations automatically. The `make migrate*` targets and the `goose ... up` line in `.devcontainer/post-create.sh` are legacy/optional; adding a new `internal/db/migrations/NNN_*.sql` file and (re)starting the server is all that's needed. Follow the existing `-- +goose Up` / `-- +goose Down` format, numbering sequentially after the highest existing file in `internal/db/migrations/`.
 - **Build targets**: `make build-prod` builds the Next.js static export, copies it to `internal/frontend/dist/`, builds Go with embed tag, then cleans up. `make build-backend` builds without frontend (dev).
+
+## Dev Environment — how Postgres & MinIO are provided
+
+The devcontainer is a **docker-compose stack** (`.devcontainer/docker-compose.yml`), not a single container. Four services on one compose network:
+
+- **`app`** — the dev container you work in (`service: app` in `devcontainer.json`). Go 1.22 + Node 20 + docker-in-docker features.
+- **`db`** — `postgres:17-alpine` (matches prod; PG17 introduced `transaction_timeout`, which older servers reject on restore), user/pass/db all `fabaid`, with a `pg_isready` healthcheck; `app` waits on `condition: service_healthy`.
+- **`minio`** — `minio/minio:latest`, root user/pass `minioadmin`, API on `:9000`, console on `:9001`.
+- **`minio-init`** — one-shot `minio/mc` job that creates the `fabaid-documents` bucket, then exits.
+
+**Reach them by compose service hostname, not `localhost`.** The `app` container talks to `db:5432` and `minio:9000`; these are injected into `app`'s environment by compose, so the running server picks them up automatically:
+
+```
+DATABASE_URL=postgres://fabaid:fabaid@db:5432/fabaid?sslmode=disable
+S3_ENDPOINT=http://minio:9000   S3_BUCKET=fabaid-documents
+S3_ACCESS_KEY=minioadmin        S3_SECRET_KEY=minioadmin   S3_USE_PATH_STYLE=true
+```
+
+The `Makefile` defaults to `localhost:5432` / `localhost:9000`, but those only work from the **host machine** (ports are published) — inside `app`, rely on the compose-provided env vars (host `db` / `minio`). Ports 8080/3000/5432/9000 are forwarded to the host. If `getent hosts db` doesn't resolve or `pg_isready -h db` fails, the compose stack isn't up in this session (in that case you can build/vet/typecheck but not run live). MinIO client init in `storage.go` strips the `http://` scheme before `minio.New()` (expects `host:port`).
 
 ## Known Issues / Gotchas
 

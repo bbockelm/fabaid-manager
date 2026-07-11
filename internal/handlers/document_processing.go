@@ -64,7 +64,8 @@ func (h *Handler) ProcessBudgetDocument(w http.ResponseWriter, r *http.Request) 
 
 	// Create the processing run record
 	run := &models.DocumentProcessingRun{
-		DocumentID:   docID,
+		DocumentID:   &docID,
+		RunType:      "budget_extraction",
 		EntityType:   entityType,
 		EntityID:     entityID,
 		Status:       "pending",

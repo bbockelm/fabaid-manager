@@ -22,7 +22,10 @@ jobs:
           - platform: linux/arm64
             runner: ubuntu-24.04-arm
     runs-on: ${{ matrix.runner }}
-    environment: Deployment
+    # Only enter the protected Deployment environment when we actually push
+    # (non-PR). On pull requests the job just builds to verify, so requesting
+    # the environment would be rejected by its branch-protection rule.
+    environment: ${{ github.event_name != 'pull_request' && 'Deployment' || '' }}
     permissions:
       contents: read
       packages: write

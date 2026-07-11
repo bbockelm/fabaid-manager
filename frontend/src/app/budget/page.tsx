@@ -172,6 +172,7 @@ function InstitutionBudgetPanel({
   const queryClient = useQueryClient();
   const [showLineItemForm, setShowLineItemForm] = useState(false);
   const [finalizeErrors, setFinalizeErrors] = useState<string[]>([]);
+  const [finalizeWarnings, setFinalizeWarnings] = useState<string[]>([]);
   const budgetsKey = ['institution-budgets', entityType, entityId];
 
   const { data: allBudgets, isLoading: budgetsLoading } = useQuery({
@@ -196,7 +197,11 @@ function InstitutionBudgetPanel({
 
   const finalizeMutation = useMutation({
     mutationFn: () => api.institutionBudgets.finalize(entityType, entityId, budget!.id),
-    onSuccess: () => { setFinalizeErrors([]); queryClient.invalidateQueries({ queryKey: budgetsKey }); },
+    onSuccess: (result) => {
+      setFinalizeErrors([]);
+      setFinalizeWarnings(result?.warnings ?? []);
+      queryClient.invalidateQueries({ queryKey: budgetsKey });
+    },
     onError: (err) => {
       if (err instanceof ValidationError) {
         setFinalizeErrors(err.validationErrors);
@@ -308,6 +313,7 @@ function InstitutionBudgetPanel({
       li => li.line_type === 'fringe' && li.personnel_id === salaryLineItem.personnel_id
     );
     for (const fli of fringeItems) {
+      if (fli.is_manual_override) continue; // don't clobber a hand-entered composite amount
       const matchingRate = yearFringeRates.find(fr => fli.description?.includes(fr.rate_name));
       if (matchingRate) {
         // Fringe calculated on unrounded salary, then rounded to whole dollars
@@ -336,9 +342,12 @@ function InstitutionBudgetPanel({
     queryClient.invalidateQueries({ queryKey: lineItemsKey });
   }, [budget, personnel, lineItems, entityType, entityId, queryClient, lineItemsKey]);
 
-  // Add missing fringe lines for a person who has a salary but no (or partial) fringe
-  const handleAddMissingFringe = useCallback(async (personnelId: string) => {
+  // Add a single fringe line for a person, for the specifically chosen rate.
+  // Fringe is opt-in: we never auto-apply every rate — the user picks which rate to add.
+  const handleAddFringeRate = useCallback(async (personnelId: string, rateId: string) => {
     if (!budget) return;
+    const fr = yearFringeRates.find(r => r.id === rateId);
+    if (!fr) return;
     const salaryLine = (lineItems ?? []).find(
       li => li.line_type === 'personnel' && li.personnel_id === personnelId
     );
@@ -346,33 +355,29 @@ function InstitutionBudgetPanel({
     const existingFringe = (lineItems ?? []).filter(
       li => li.line_type === 'fringe' && li.personnel_id === personnelId
     );
+    if (existingFringe.some(ef => ef.description?.includes(fr.rate_name))) return; // already present
     const person = personnel.find(p => p.id === personnelId);
     // Recompute exact (unrounded) salary for fringe calculation
     const exactSalary = person && salaryLine.effort_months > 0
       ? (person.annual_salary * Math.pow(1 + salaryEscalationRate, fiscalYear - 1) / 12) * salaryLine.effort_months
       : salaryLine.amount;
 
-    // Fetch salary WBS allocations to copy to new fringe lines
+    // Fetch salary WBS allocations to copy to the new fringe line
     const salaryWbs = await api.budgetLineItems.listWBS(entityType, entityId, budget.id, salaryLine.id);
 
-    for (const fr of yearFringeRates) {
-      const alreadyExists = existingFringe.some(ef => ef.description?.includes(fr.rate_name));
-      if (!alreadyExists) {
-        // Fringe calculated on unrounded salary, then rounded to whole dollars
-        const fringeAmount = Math.round(exactSalary * fr.rate);
-        const fringeLine = await api.budgetLineItems.create(entityType, entityId, budget.id, {
-          line_type: 'fringe',
-          description: person ? `${person.name} — ${fr.rate_name}` : fr.rate_name,
-          personnel_id: personnelId,
-          amount: fringeAmount,
-          overhead_rate_id: salaryLine.overhead_rate_id,
-          notes: `${(fr.rate * 100).toFixed(2)}% of $${salaryLine.amount.toLocaleString()}`,
-        });
-        if (salaryWbs.length > 0) {
-          await api.budgetLineItems.setWBS(entityType, entityId, budget.id, fringeLine.id,
-            salaryWbs.map(w => ({ wbs_area_id: w.wbs_area_id, allocation_percent: w.allocation_percent })));
-        }
-      }
+    // Fringe calculated on unrounded salary, then rounded to whole dollars
+    const fringeAmount = Math.round(exactSalary * fr.rate);
+    const fringeLine = await api.budgetLineItems.create(entityType, entityId, budget.id, {
+      line_type: 'fringe',
+      description: person ? `${person.name} — ${fr.rate_name}` : fr.rate_name,
+      personnel_id: personnelId,
+      amount: fringeAmount,
+      overhead_rate_id: salaryLine.overhead_rate_id,
+      notes: `${(fr.rate * 100).toFixed(2)}% of $${salaryLine.amount.toLocaleString()}`,
+    });
+    if (salaryWbs.length > 0) {
+      await api.budgetLineItems.setWBS(entityType, entityId, budget.id, fringeLine.id,
+        salaryWbs.map(w => ({ wbs_area_id: w.wbs_area_id, allocation_percent: w.allocation_percent })));
     }
     queryClient.invalidateQueries({ queryKey: lineItemsKey });
   }, [budget, lineItems, personnel, yearFringeRates, entityType, entityId, queryClient, lineItemsKey, salaryEscalationRate, fiscalYear]);
@@ -434,7 +439,7 @@ function InstitutionBudgetPanel({
           <div className="flex gap-1.5">
             <NSF1030Dropdown entityType={entityType} entityId={entityId} fiscalYear={fiscalYear} />
             {isDraft && (
-              <button onClick={() => { setFinalizeErrors([]); finalizeMutation.mutate(); }}
+              <button onClick={() => { setFinalizeErrors([]); setFinalizeWarnings([]); finalizeMutation.mutate(); }}
                 disabled={finalizeMutation.isPending}
                 className="px-3 py-1.5 bg-green-600 text-white rounded text-xs hover:bg-green-700 disabled:opacity-50">
                 {finalizeMutation.isPending ? '...' : 'Finalize'}
@@ -456,6 +461,15 @@ function InstitutionBudgetPanel({
           </div>
         </div>
       </div>
+
+      {finalizeWarnings.length > 0 && (
+        <div className="bg-amber-50 border border-amber-300 rounded-lg p-4">
+          <p className="text-sm font-medium text-amber-800 mb-1">Budget finalized with warnings:</p>
+          <ul className="list-disc list-inside text-sm text-amber-700 space-y-0.5">
+            {finalizeWarnings.map((w, i) => <li key={i}>{w}</li>)}
+          </ul>
+        </div>
+      )}
 
       {finalizeErrors.length > 0 && (
         <div className="bg-red-50 border border-red-300 rounded-lg p-4">
@@ -522,7 +536,7 @@ function InstitutionBudgetPanel({
                   salaryEscalationRate={salaryEscalationRate} fiscalYear={fiscalYear}
                   onUpdate={(data) => updateLineItem.mutate({ id: li.id, data })}
                   onEffortUpdate={handleEffortUpdate}
-                  onAddMissingFringe={handleAddMissingFringe}
+                  onAddFringeRate={handleAddFringeRate}
                   onDelete={() => { if (li.personnel_id) handleDeletePersonnelBundle(li.personnel_id); else deleteLineItem.mutate(li.id); }} />
               ))}
               {!lineItemsLoading && personnelAndFringeItems.length === 0 && (
@@ -609,7 +623,7 @@ function LineItemRow({
   personnel, wbsAreas, overheadRates, onUpdate, onDelete,
   tableMode = 'other', salaryEscalationRate = 0, fiscalYear = 1,
   onEffortUpdate, yearFringeRates = [], allLineItems = [],
-  onAddMissingFringe,
+  onAddFringeRate,
 }: {
   lineItem: BudgetLineItem; entityType: string; entityId: string; budgetId: string;
   isDraft: boolean; personnel: Personnel[]; wbsAreas: WBSArea[]; overheadRates: OverheadRate[];
@@ -619,7 +633,7 @@ function LineItemRow({
   onEffortUpdate?: (lineItem: BudgetLineItem, newEffort: number) => void;
   yearFringeRates?: InstitutionFringeRate[];
   allLineItems?: BudgetLineItem[];
-  onAddMissingFringe?: (personnelId: string) => void;
+  onAddFringeRate?: (personnelId: string, rateId: string) => void;
 }) {
   const [editing, setEditing] = useState(false);
   const [showWbs, setShowWbs] = useState(false);
@@ -627,7 +641,7 @@ function LineItemRow({
     line_type: lineItem.line_type, description: lineItem.description || '',
     personnel_id: lineItem.personnel_id || '', effort_months: lineItem.effort_months,
     amount: lineItem.amount, overhead_rate_id: lineItem.overhead_rate_id || '',
-    notes: lineItem.notes || '',
+    notes: lineItem.notes || '', is_manual_override: lineItem.is_manual_override ?? false,
   });
 
   const person = personnel.find((p) => p.id === lineItem.personnel_id);
@@ -661,7 +675,13 @@ function LineItemRow({
       if ((form.overhead_rate_id || null) !== (lineItem.overhead_rate_id || null)) nonEffortChanges.overhead_rate_id = form.overhead_rate_id || null;
       if (Object.keys(nonEffortChanges).length > 0) onUpdate(nonEffortChanges);
     } else {
-      onUpdate({ ...form, personnel_id: form.personnel_id || undefined, overhead_rate_id: form.overhead_rate_id || null });
+      // form.is_manual_override is set when a fringe amount is typed by hand and cleared
+      // when it's recalculated from a rate (used for mid-year composite fringe rates).
+      onUpdate({
+        ...form,
+        personnel_id: form.personnel_id || undefined,
+        overhead_rate_id: form.overhead_rate_id || null,
+      });
     }
     setEditing(false);
   };
@@ -705,7 +725,7 @@ function LineItemRow({
       line_type: lineItem.line_type, description: lineItem.description || '',
       personnel_id: lineItem.personnel_id || '', effort_months: lineItem.effort_months,
       amount: lineItem.amount, overhead_rate_id: lineItem.overhead_rate_id || '',
-      notes: lineItem.notes || '',
+      notes: lineItem.notes || '', is_manual_override: lineItem.is_manual_override ?? false,
     });
     setEditing(false);
   };
@@ -825,6 +845,7 @@ function LineItemRow({
                         description: person ? `${person.name} — ${newRate.rate_name}` : newRate.rate_name,
                         amount: newAmount,
                         notes: `${(newRate.rate * 100).toFixed(2)}% of $${personnelSalaryAmount.toLocaleString()}`,
+                        is_manual_override: false, // recomputed from a rate
                       });
                     }
                   }}
@@ -841,9 +862,14 @@ function LineItemRow({
             </td>
             <td className="px-3 py-2">
               <div className="flex flex-col gap-1">
-                <div className="border rounded px-2 py-1 text-xs text-right bg-gray-100 text-gray-600">
-                  ${form.amount.toLocaleString()}
-                </div>
+                <CurrencyInput value={form.amount}
+                  onChange={(val) => setForm({ ...form, amount: val, is_manual_override: true })}
+                  className={`w-full border rounded px-2 py-1 text-xs text-right ${form.is_manual_override ? 'border-amber-400 bg-amber-50' : ''}`} />
+                {form.is_manual_override && (
+                  <div className="text-[10px] text-amber-600 text-right" title="This amount was entered manually (e.g. a mid-year composite rate) and will not be recalculated from salary × rate.">
+                    ⚠ manual override
+                  </div>
+                )}
                 {matchedFringeRate && personnelSalaryAmount > 0 && (() => {
                   // Fringe calculated on unrounded salary, then rounded to whole dollars
                   const expected = Math.round(exactSalaryForFringe * matchedFringeRate.rate);
@@ -855,6 +881,7 @@ function LineItemRow({
                         <button onClick={() => setForm({
                           ...form, amount: expected,
                           notes: `${(matchedFringeRate.rate * 100).toFixed(2)}% of $${personnelSalaryAmount.toLocaleString()}`,
+                          is_manual_override: false, // reset to the formula
                         })}
                           className="ml-1 text-nsf-light hover:underline">
                           ↻ Recalculate
@@ -960,7 +987,9 @@ function LineItemRow({
     const expectedFringeAmount = !isSalaryLine && matchedFringeRate && personnelSalaryAmount > 0
       ? Math.round(exactSalaryForFringe * matchedFringeRate.rate)
       : null;
-    const isFringeStale = expectedFringeAmount !== null && Math.abs(lineItem.amount - expectedFringeAmount) > 0.5;
+    // A manual override intentionally diverges from the formula, so it's not "stale".
+    const isFringeStale = !lineItem.is_manual_override && expectedFringeAmount !== null && Math.abs(lineItem.amount - expectedFringeAmount) > 0.5;
+    const isOverride = !isSalaryLine && !!lineItem.is_manual_override;
     return (
       <>
         <tr className={`hover:bg-gray-50 ${isDraft ? 'cursor-pointer' : ''}`}
@@ -989,7 +1018,12 @@ function LineItemRow({
             )}
           </td>
           <td className="px-4 py-3 text-sm text-right font-medium">
-            <span className={(isSalaryStale || isFringeStale) ? 'text-amber-600' : ''}>${lineItem.amount.toLocaleString()}</span>
+            <span className={(isSalaryStale || isFringeStale || isOverride) ? 'text-amber-600' : ''}>${lineItem.amount.toLocaleString()}</span>
+            {isOverride && (
+              <div className="text-[10px] text-amber-600 font-normal" title="This fringe amount was entered manually and will not be recalculated from salary × rate.">
+                ⚠ manual override
+              </div>
+            )}
             {isSalaryStale && (
               <div className="text-[10px] text-amber-600 font-normal" title={`Expected $${expectedSalaryAmount!.toLocaleString()} from current salary`}>
                 ⚠ expected ${expectedSalaryAmount!.toLocaleString()}
@@ -1013,7 +1047,7 @@ function LineItemRow({
                 const existingFringe = allLineItems.filter(
                   li => li.line_type === 'fringe' && li.personnel_id === lineItem.personnel_id
                 );
-                const hasMissingFringe = yearFringeRates.some(
+                const missingRates = yearFringeRates.filter(
                   fr => !existingFringe.some(ef => ef.description?.includes(fr.rate_name))
                 );
                 return (
@@ -1022,11 +1056,17 @@ function LineItemRow({
                       <button onClick={() => setEditing(true)} className="text-nsf-light hover:underline text-xs">Edit</button>
                       <button onClick={onDelete} className="text-red-400 hover:text-red-600 text-xs" title="Delete salary + fringe for this person">✕</button>
                     </div>
-                    {hasMissingFringe && onAddMissingFringe && lineItem.personnel_id && (
-                      <button onClick={() => onAddMissingFringe(lineItem.personnel_id!)}
-                        className="text-[10px] text-amber-600 hover:underline whitespace-nowrap" title="Add missing fringe line items">
-                        + Add Fringe
-                      </button>
+                    {missingRates.length > 0 && onAddFringeRate && lineItem.personnel_id && (
+                      <select
+                        value=""
+                        onChange={(e) => { if (e.target.value) onAddFringeRate(lineItem.personnel_id!, e.target.value); }}
+                        className="text-[10px] text-amber-600 border border-amber-200 rounded bg-amber-50 max-w-[9rem]"
+                        title="Add a fringe rate for this person (optional — pick the one that applies)">
+                        <option value="">+ Add fringe…</option>
+                        {missingRates.map(fr => (
+                          <option key={fr.id} value={fr.id}>{fr.rate_name} ({(fr.rate * 100).toFixed(1)}%)</option>
+                        ))}
+                      </select>
                     )}
                   </div>
                 );
@@ -1528,7 +1568,9 @@ function LineItemForm({
   const [mode, setMode] = useState<'personnel' | 'other'>('personnel');
   const [personId, setPersonId] = useState('');
   const [effortMonths, setEffortMonths] = useState(0);
-  const [selectedFringeIds, setSelectedFringeIds] = useState<string[]>(yearFringeRates.map(fr => fr.id));
+  // Fringe is opt-in: start with nothing selected so universities with several rates
+  // (by position/salary) don't force every rate onto each person.
+  const [selectedFringeIds, setSelectedFringeIds] = useState<string[]>([]);
   const [personnelOverheadRateId, setPersonnelOverheadRateId] = useState('');
   const [form, setForm] = useState({
     line_type: 'travel', description: '', amount: 0, overhead_rate_id: '', notes: '',
@@ -1554,8 +1596,9 @@ function LineItemForm({
       {mode === 'personnel' && (
         <div className="space-y-3">
           <p className="text-sm text-gray-500">
-            Select a person and effort. Salary is computed from annual salary and fringe lines are
-            auto-created from the institution&apos;s fringe rates for this year.
+            Select a person and effort. Salary is computed from annual salary. Fringe is optional —
+            check only the rate(s) that apply to this person (many institutions have several rates by
+            position or salary). You can add or change fringe later from the line&apos;s row.
           </p>
           <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
             <div>
