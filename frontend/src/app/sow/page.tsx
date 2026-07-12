@@ -13,7 +13,7 @@ import {
 } from '@/lib/api';
 import { useGrant } from '@/lib/grant-context';
 import { useAuth } from '@/lib/auth-context';
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 
 const PROJECT_YEARS = [1, 2, 3, 4, 5];
 const YEAR_LABELS: Record<number, string> = {
@@ -208,6 +208,7 @@ function SubawardSOWPanel({ grantId, subaward }: { grantId: string; subaward: Su
                   >
                     Preview
                   </a>
+                  <SignedSOWControls grantId={grantId} subawardId={subaward.id} sow={sow} />
                   <button
                     onClick={() => {
                       if (confirm(`Delete SOW for ${YEAR_LABELS[sow.fiscal_year] ?? `Year ${sow.fiscal_year}`}? This cannot be undone.`)) {
@@ -236,6 +237,33 @@ function SubawardSOWPanel({ grantId, subaward }: { grantId: string; subaward: Su
         </div>
       )}
     </section>
+  );
+}
+
+/* ─── Signed-SOW upload / download (per-SOW) ─── */
+
+function SignedSOWControls({ grantId, subawardId, sow }: { grantId: string; subawardId: string; sow: StatementOfWork }) {
+  const queryClient = useQueryClient();
+  const fileRef = useRef<HTMLInputElement>(null);
+  const upload = useMutation({
+    mutationFn: (file: File) => api.sow.uploadSigned(grantId, subawardId, sow.id, file),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['sow', grantId, subawardId] }),
+  });
+  return (
+    <span className="flex items-center gap-3">
+      {sow.signed_doc_id && (
+        <a href={api.documents.downloadUrl(sow.signed_doc_id)} target="_blank" rel="noopener noreferrer"
+          className="text-sm text-green-700 hover:underline font-medium" title="Download the signed SOW">
+          ✓ Signed
+        </a>
+      )}
+      <input ref={fileRef} type="file" accept="application/pdf" className="hidden"
+        onChange={(e) => { const f = e.target.files?.[0]; if (f) upload.mutate(f); e.target.value = ''; }} />
+      <button onClick={() => fileRef.current?.click()} disabled={upload.isPending}
+        className="text-sm text-nsf-light hover:underline font-medium disabled:opacity-50">
+        {upload.isPending ? 'Uploading…' : sow.signed_doc_id ? 'Replace signed' : 'Upload signed'}
+      </button>
+    </span>
   );
 }
 
